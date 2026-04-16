@@ -75,7 +75,7 @@ Maki asks your local Ollama for the list of installed models, so there's no buil
 |------|--------|-------------------------------|---------|
 | Weak | **mistral-small-latest, mistral-small-2603** (default) | $0.15 / $0.60 | 262K ctx / 262K out |
 | Medium | **mistral-large-latest, mistral-large-2512** (default) | $0.50 / $1.50 | 262K ctx / 262K out |
-| Strong | **devstral-latest, devstral-medium-latest, devstral-2512** (default) | $0.40 / $2.00 | 262K ctx / 262K out |
+| Strong | **devstral-2, devstral-latest, devstral-medium-latest, devstral-2512** (default) | $0.40 / $2.00 | 262K ctx / 262K out |
 
 Defaults: devstral-latest (strong), mistral-large-latest (medium), mistral-small-latest (weak)
 

@@ -8,6 +8,21 @@ use crate::{AgentError, Message, ProviderEvent, StreamResponse, ThinkingConfig};
 use super::ResolvedAuth;
 use super::openai_compat::{OpenAiCompatConfig, OpenAiCompatProvider};
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mistral_models_include_devstral_2() {
+        let models = models();
+        let strong_models = &models[0]; // First entry is Strong tier
+        assert!(strong_models.prefixes.contains(&"devstral-2"));
+        assert!(strong_models.prefixes.contains(&"devstral-latest"));
+        assert!(strong_models.prefixes.contains(&"devstral-medium-latest"));
+        assert!(strong_models.prefixes.contains(&"devstral-2512"));
+    }
+}
+
 static CONFIG: OpenAiCompatConfig = OpenAiCompatConfig {
     api_key_env: "MISTRAL_API_KEY",
     base_url: "https://api.mistral.ai/v1",
@@ -19,7 +34,7 @@ static CONFIG: OpenAiCompatConfig = OpenAiCompatConfig {
 pub(crate) fn models() -> &'static [ModelEntry] {
     &[
         ModelEntry {
-            prefixes: &["devstral-latest", "devstral-medium-latest", "devstral-2512"],
+            prefixes: &["devstral-2", "devstral-latest", "devstral-medium-latest", "devstral-2512"],
             tier: ModelTier::Strong,
             family: ModelFamily::Generic,
             default: true,
