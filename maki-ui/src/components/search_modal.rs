@@ -182,7 +182,7 @@ impl SearchModal {
             }
         }
 
-        self.matches.sort_by(|a, b| b.score.cmp(&a.score));
+        self.matches.sort_by_key(|b| std::cmp::Reverse(b.score));
     }
 
     pub fn current_segment_index(&self) -> Option<usize> {

@@ -776,7 +776,7 @@ where
 
     pub fn list_in(cwd: &str, dir: &Path) -> Result<Vec<SessionSummary>, SessionError> {
         let mut summaries = scan_headers(cwd, dir)?;
-        summaries.sort_unstable_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        summaries.sort_unstable_by_key(|b| std::cmp::Reverse(b.updated_at));
         Ok(summaries)
     }
 

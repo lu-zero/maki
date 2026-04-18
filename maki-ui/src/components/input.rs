@@ -288,6 +288,7 @@ impl InputBox {
         }
     }
 
+    #[rustversion::attr(since(1.95), allow(clippy::manual_checked_ops))]
     fn visual_cursor_y(&self, ew: usize) -> u16 {
         let lines_above: u16 = self
             .buffer

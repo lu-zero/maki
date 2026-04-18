@@ -42,7 +42,7 @@ impl Glob {
                 })
                 .collect();
 
-            entries.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+            entries.sort_unstable_by_key(|b| std::cmp::Reverse(b.0));
             entries.truncate(search_limit);
 
             Ok(ToolOutput::GlobResult {
