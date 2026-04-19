@@ -15,7 +15,7 @@ path = "src/main.rs"
 maki-agent = { workspace = true }
 maki-config = { workspace = true }
 maki-providers = { workspace = true }
-maki-ui = { workspace = true }
+maki-ui = { workspace = true, features = ["generic-labels"] }
 serde_json = { workspace = true }
 smol = { workspace = true }
 strum = { workspace = true }

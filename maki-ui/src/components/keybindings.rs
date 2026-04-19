@@ -4,7 +4,7 @@ use unicode_width::UnicodeWidthStr;
 
 macro_rules! mod_key {
     ($suffix:expr) => {
-        if cfg!(target_os = "macos") {
+        if cfg!(all(target_os = "macos", not(feature = "generic-labels"))) {
             concat!("⌘", $suffix)
         } else {
             concat!("Ctrl+", $suffix)

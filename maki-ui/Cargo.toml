@@ -41,6 +41,7 @@ shell-words = { workspace = true }
 
 [features]
 demo = []
+generic-labels = []
 
 [dev-dependencies]
 test-case = { workspace = true }
