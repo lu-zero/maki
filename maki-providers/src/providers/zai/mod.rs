@@ -1,3 +1,5 @@
+pub mod auth;
+
 use flume::Sender;
 use serde_json::Value;
 use tracing::warn;

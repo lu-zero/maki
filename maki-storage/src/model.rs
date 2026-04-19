@@ -14,6 +14,31 @@ pub fn read_model(dir: &DataDir) -> Option<String> {
     (!spec.is_empty()).then(|| spec.to_owned())
 }
 
+pub fn persist_key(dir: &DataDir, env_var: &str, value: &str) -> std::io::Result<()> {
+    let env_path = dir.path().join(".env");
+    let content = if env_path.exists() {
+        fs::read_to_string(&env_path)?
+    } else {
+        String::new()
+    };
+    let line = format!("{env_var}={value}");
+    let prefix = format!("{env_var}=");
+    let updated = if content.lines().any(|l| l.starts_with(&prefix)) {
+        content
+            .lines()
+            .map(|l| if l.starts_with(&prefix) { &line } else { l })
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else if content.ends_with('\n') || content.is_empty() {
+        format!("{content}{line}")
+    } else {
+        format!("{content}\n{line}")
+    };
+    fs::write(&env_path, updated)?;
+    println!("Saved {env_var} to {}", env_path.display());
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
