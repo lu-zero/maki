@@ -21,6 +21,7 @@ On macOS, `Ctrl` maps to `Cmd` where it makes sense (run `/help` for exact keybi
 | `Ctrl+O` | Open plan in editor |
 | `Ctrl+T` | Toggle todo / plan panel |
 | `Ctrl+X` | Open tasks |
+| `Ctrl+Z` | Suspend process |
 
 ## Editing
 
