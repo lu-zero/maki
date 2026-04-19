@@ -112,6 +112,7 @@ pub fn models_for_provider(provider: ProviderKind) -> &'static [ModelEntry] {
         ProviderKind::OpenAi => openai::models(),
         ProviderKind::Ollama => ollama::models(),
         ProviderKind::Mistral => mistral::models(),
+        ProviderKind::MistralCoding => mistral::models_coding(),
         ProviderKind::Google => google::models(),
         ProviderKind::Zai | ProviderKind::ZaiCodingPlan => zai::models(),
         ProviderKind::Synthetic => synthetic::models(),

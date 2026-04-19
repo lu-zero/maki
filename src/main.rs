@@ -21,7 +21,7 @@ use tracing_subscriber::EnvFilter;
 
 use maki_providers::model::{Model, ModelTier};
 use maki_providers::provider::{ProviderKind, fetch_all_models};
-use maki_providers::{dynamic, openai_auth};
+use maki_providers::{dynamic, mistral_auth, openai_auth};
 use maki_storage::log::RotatingFileWriter;
 use maki_storage::model::{persist_model, read_model};
 use print::OutputFormat;
@@ -225,6 +225,16 @@ fn run() -> Result<()> {
             match action {
                 AuthAction::Login { provider } => match provider.as_str() {
                     "openai" => openai_auth::login(&storage)?,
+                    "mistral" => {
+                        let api_key = mistral_auth::login()?;
+                        persist_mistral_key(&storage, &api_key)?;
+                        persist_model(&storage, "mistral/devstral-latest");
+                    }
+                    "mistral-coding" => {
+                        let api_key = mistral_auth::login_coding()?;
+                        persist_mistral_key(&storage, &api_key)?;
+                        persist_model(&storage, "mistral-coding/mistral-vibe-cli-latest");
+                    }
                     slug => dynamic::login(slug)?,
                 },
                 AuthAction::Logout { provider } => match provider.as_str() {
@@ -463,6 +473,8 @@ fn resolve_model(
 const PROVIDER_PRIORITY: &[ProviderKind] = &[
     ProviderKind::Anthropic,
     ProviderKind::OpenAi,
+    ProviderKind::Mistral,
+    ProviderKind::MistralCoding,
     ProviderKind::Zai,
     ProviderKind::ZaiCodingPlan,
 ];
@@ -478,6 +490,36 @@ fn auto_detect_model() -> Option<Model> {
         }
     }
     None
+}
+
+fn persist_mistral_key(storage: &DataDir, api_key: &str) -> Result<()> {
+    let env_path = storage.path().join(".env");
+    let content = if env_path.exists() {
+        std::fs::read_to_string(&env_path)?
+    } else {
+        String::new()
+    };
+    let key_line = format!("MISTRAL_API_KEY={api_key}");
+    let updated = if content.lines().any(|l| l.starts_with("MISTRAL_API_KEY=")) {
+        content
+            .lines()
+            .map(|l| {
+                if l.starts_with("MISTRAL_API_KEY=") {
+                    &key_line
+                } else {
+                    l
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else if content.ends_with('\n') || content.is_empty() {
+        format!("{content}{key_line}")
+    } else {
+        format!("{content}\n{key_line}")
+    };
+    std::fs::write(&env_path, updated)?;
+    println!("Saved MISTRAL_API_KEY to {}", env_path.display());
+    Ok(())
 }
 
 fn install_panic_log_hook() {
