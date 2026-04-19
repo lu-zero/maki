@@ -2384,6 +2384,7 @@ dependencies = [
  "futures-lite",
  "isahc",
  "maki-storage",
+ "open",
  "serde",
  "serde_json",
  "smol",
