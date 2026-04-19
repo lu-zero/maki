@@ -363,6 +363,10 @@ pub fn create(slug: &str, timeouts: super::Timeouts) -> Result<Box<dyn Provider>
             Mistral::with_auth(auth.clone(), timeouts)
                 .with_system_prefix(meta.system_prefix.clone()),
         ),
+        ProviderKind::MistralCoding => Box::new(
+            Mistral::with_auth(auth.clone(), timeouts)
+                .with_system_prefix(meta.system_prefix.clone()),
+        ),
         ProviderKind::Zai => Box::new(
             Zai::with_auth(ZaiPlan::Standard, auth.clone(), timeouts)
                 .with_system_prefix(meta.system_prefix.clone()),

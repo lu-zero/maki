@@ -26,14 +26,39 @@ static CONFIG: OpenAiCompatConfig = OpenAiCompatConfig {
     provider_name: "Mistral",
 };
 
-const DEVSTRAL_STRONG: ModelEntry = ModelEntry {
-    prefixes: &[
-        "devstral-2",
-        "devstral-latest",
-        "devstral-medium-latest",
-        "devstral-2512",
-    ],
+const MISTRAL_MEDIUM_3_5: ModelEntry = ModelEntry {
+    prefixes: &["mistral-vibe-cli-latest", "mistral-medium-3.5"],
     tier: ModelTier::Strong,
+    family: ModelFamily::Generic,
+    default: true,
+    pricing: ModelPricing {
+        input: 1.5,
+        output: 7.5,
+        cache_write: 0.0,
+        cache_read: 0.0,
+    },
+    max_output_tokens: 262_144,
+    context_window: 262_144,
+};
+
+const DEVSTRAL_SMALL: ModelEntry = ModelEntry {
+    prefixes: &["devstral-small-latest", "devstral-small"],
+    tier: ModelTier::Weak,
+    family: ModelFamily::Generic,
+    default: true,
+    pricing: ModelPricing {
+        input: 0.1,
+        output: 0.3,
+        cache_write: 0.0,
+        cache_read: 0.0,
+    },
+    max_output_tokens: 262_144,
+    context_window: 262_144,
+};
+
+const MISTRAL_MEDIUM: ModelEntry = ModelEntry {
+    prefixes: &["mistral-medium-latest", "mistral-medium-2508"],
+    tier: ModelTier::Medium,
     family: ModelFamily::Generic,
     default: true,
     pricing: ModelPricing {
@@ -42,102 +67,16 @@ const DEVSTRAL_STRONG: ModelEntry = ModelEntry {
         cache_write: 0.0,
         cache_read: 0.0,
     },
-    max_output_tokens: 262_144,
-    context_window: 262_144,
+    max_output_tokens: 131_072,
+    context_window: 131_072,
 };
 
 pub(crate) fn models() -> &'static [ModelEntry] {
-    &[
-        DEVSTRAL_STRONG,
-        ModelEntry {
-            prefixes: &["mistral-large-latest", "mistral-large-2512"],
-            tier: ModelTier::Medium,
-            family: ModelFamily::Generic,
-            default: true,
-            pricing: ModelPricing {
-                input: 0.5,
-                output: 1.5,
-                cache_write: 0.0,
-                cache_read: 0.0,
-            },
-            max_output_tokens: 262_144,
-            context_window: 262_144,
-        },
-        ModelEntry {
-            prefixes: &["mistral-small-latest", "mistral-small-2603"],
-            tier: ModelTier::Weak,
-            family: ModelFamily::Generic,
-            default: true,
-            pricing: ModelPricing {
-                input: 0.15,
-                output: 0.60,
-                cache_write: 0.0,
-                cache_read: 0.0,
-            },
-            max_output_tokens: 262_144,
-            context_window: 262_144,
-        },
-    ]
+    &[MISTRAL_MEDIUM_3_5, MISTRAL_MEDIUM, DEVSTRAL_SMALL]
 }
 
 pub(crate) fn models_coding() -> &'static [ModelEntry] {
-    &[
-        ModelEntry {
-            prefixes: &[
-                "mistral-vibe-cli-latest",
-                "devstral-2",
-                "devstral-latest",
-                "devstral-2512",
-            ],
-            tier: ModelTier::Strong,
-            family: ModelFamily::Generic,
-            default: true,
-            pricing: ModelPricing {
-                input: 0.4,
-                output: 2.0,
-                cache_write: 0.0,
-                cache_read: 0.0,
-            },
-            max_output_tokens: 262_144,
-            context_window: 262_144,
-        },
-        ModelEntry {
-            prefixes: &[
-                "mistral-vibe-cli-with-tools",
-                "mistral-medium-latest",
-                "mistral-medium-2508",
-            ],
-            tier: ModelTier::Medium,
-            family: ModelFamily::Generic,
-            default: true,
-            pricing: ModelPricing {
-                input: 0.4,
-                output: 2.0,
-                cache_write: 0.0,
-                cache_read: 0.0,
-            },
-            max_output_tokens: 131_072,
-            context_window: 131_072,
-        },
-        ModelEntry {
-            prefixes: &[
-                "mistral-vibe-cli-fast",
-                "mistral-small-latest",
-                "mistral-small-2603",
-            ],
-            tier: ModelTier::Weak,
-            family: ModelFamily::Generic,
-            default: true,
-            pricing: ModelPricing {
-                input: 0.15,
-                output: 0.60,
-                cache_write: 0.0,
-                cache_read: 0.0,
-            },
-            max_output_tokens: 262_144,
-            context_window: 262_144,
-        },
-    ]
+    &[MISTRAL_MEDIUM_3_5, MISTRAL_MEDIUM, DEVSTRAL_SMALL]
 }
 
 pub struct Mistral {

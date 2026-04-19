@@ -13,6 +13,8 @@ use tracing_subscriber::EnvFilter;
 const PROVIDER_PRIORITY: &[ProviderKind] = &[
     ProviderKind::Anthropic,
     ProviderKind::OpenAi,
+    ProviderKind::Mistral,
+    ProviderKind::MistralCoding,
     ProviderKind::Zai,
     ProviderKind::ZaiCodingPlan,
     ProviderKind::Synthetic,

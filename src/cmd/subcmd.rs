@@ -10,13 +10,24 @@ use maki_agent::tools::ToolRegistry;
 use maki_config::load_config;
 use maki_lua::PluginHost;
 use maki_providers::provider::fetch_all_models;
-use maki_providers::{copilot_auth, dynamic, openai_auth};
+use maki_providers::{copilot_auth, dynamic, mistral_auth, openai_auth};
 use maki_storage::StateDir;
+use maki_storage::model::persist_model;
 
 pub fn auth_login(provider: &str, storage: &StateDir) -> Result<()> {
     match provider {
         "openai" => openai_auth::login(storage)?,
         "copilot" => copilot_auth::login()?,
+        "mistral" => {
+            let api_key = mistral_auth::login()?;
+            persist_env_key("MISTRAL_API_KEY", &api_key)?;
+            persist_model(storage, "mistral/devstral-latest");
+        }
+        "mistral-coding" => {
+            let api_key = mistral_auth::login_coding()?;
+            persist_env_key("MISTRAL_API_KEY", &api_key)?;
+            persist_model(storage, "mistral-coding/mistral-vibe-cli-latest");
+        }
         slug => dynamic::login(slug)?,
     }
     Ok(())
@@ -97,5 +108,30 @@ pub fn mcp_logout(server: &str, storage: &StateDir) -> Result<()> {
     } else {
         eprintln!("No stored credentials for MCP server '{server}'");
     }
+    Ok(())
+}
+
+fn persist_env_key(key: &str, value: &str) -> Result<()> {
+    let env_path = maki_storage::paths::config_dir()?.join(".env");
+    let content = if env_path.exists() {
+        std::fs::read_to_string(&env_path)?
+    } else {
+        String::new()
+    };
+    let key_line = format!("{key}={value}");
+    let prefix = format!("{key}=");
+    let updated = if content.lines().any(|l| l.starts_with(&prefix)) {
+        content
+            .lines()
+            .map(|l| if l.starts_with(&prefix) { &key_line } else { l })
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else if content.ends_with('\n') || content.is_empty() {
+        format!("{content}{key_line}")
+    } else {
+        format!("{content}\n{key_line}")
+    };
+    std::fs::write(&env_path, updated)?;
+    println!("Saved {key} to {}", env_path.display());
     Ok(())
 }

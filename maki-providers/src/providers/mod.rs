@@ -1,3 +1,4 @@
+use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
 use futures_lite::StreamExt;
@@ -142,6 +143,34 @@ pub(crate) fn http_client(timeouts: Timeouts) -> isahc::HttpClient {
         .low_speed_timeout(LOW_SPEED_BYTES_PER_SEC, timeouts.low_speed)
         .build()
         .expect("failed to build HTTP client")
+}
+
+pub(crate) fn prompt_api_key(url: &str, prompt: &str) -> Result<String, AgentError> {
+    if let Err(e) = open::that(url) {
+        tracing::warn!(error = %e, "failed to open browser");
+    }
+    println!("Opened {} in your browser.", url);
+    println!("Create an API key and paste it below.");
+    print!("{prompt}: ");
+    io::stdout().flush().map_err(|e| AgentError::Config {
+        message: format!("flush stdout: {e}"),
+    })?;
+
+    let mut api_key = String::new();
+    io::stdin()
+        .read_line(&mut api_key)
+        .map_err(|e| AgentError::Config {
+            message: format!("read input: {e}"),
+        })?;
+    let api_key = api_key.trim().to_string();
+
+    if api_key.is_empty() {
+        return Err(AgentError::Config {
+            message: "no API key provided".to_string(),
+        });
+    }
+
+    Ok(api_key)
 }
 
 #[cfg(test)]
