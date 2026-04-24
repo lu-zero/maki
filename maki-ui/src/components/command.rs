@@ -93,6 +93,11 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
         description: "Exit the application",
         max_args: 0,
     },
+    BuiltinCommand {
+        name: "/usage",
+        description: "Show provider usage and quota (Z.AI only)",
+        max_args: 0,
+    },
 ];
 
 pub struct ParsedCommand {

@@ -13,6 +13,7 @@ use tracing::warn;
 
 #[cfg(unix)]
 const GLOBAL_CONFIG_DIR: &str = ".config/maki";
+const DATA_DIR: &str = ".maki";
 const PROJECT_DIR: &str = ".maki";
 pub const PROJECT_CONFIG_FILE: &str = ".maki/config.toml";
 const CONFIG_FILE: &str = "config.toml";
@@ -717,6 +718,9 @@ fn load_env_files_with_global(cwd: &Path, global: Option<&Path>) {
         collect_env_vars(&path.join(".env"), &mut vars);
     }
     collect_env_vars(&cwd.join(PROJECT_DIR).join(".env"), &mut vars);
+    if let Some(home) = dirs::home_dir() {
+        collect_env_vars(&home.join(DATA_DIR).join(".env"), &mut vars);
+    }
 
     for (key, value) in vars {
         if std::env::var_os(&key).is_none() {

@@ -16,6 +16,7 @@ pub use providers::dynamic;
 pub use providers::mistral::auth as mistral_auth;
 pub use providers::openai::auth as openai_auth;
 pub use providers::zai::auth as zai_auth;
+pub use providers::zai::usage as zai_usage;
 pub use types::{
     ContentBlock, ImageMediaType, ImageSource, Message, ProviderEvent, Role, StopReason,
     StreamResponse, ThinkingConfig,

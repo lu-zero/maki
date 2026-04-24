@@ -26,6 +26,7 @@ use crate::components::btw_modal::BtwModal;
 use crate::components::command::{CommandAction, CommandPalette, ParsedCommand};
 use crate::components::file_picker::{FilePickerModal, FilePickerModalAction};
 use crate::components::help_modal::HelpModal;
+use crate::components::info_modal::InfoModal;
 use crate::components::input::{InputAction, InputBox, Submission};
 use crate::components::keybindings::key;
 use crate::components::list_picker::{ListPicker, PickerAction, PickerItem};
@@ -132,6 +133,7 @@ pub struct App {
     pub(super) session_picker: SessionPicker,
     pub(super) rewind_picker: RewindPicker,
     pub(super) help_modal: HelpModal,
+    pub(super) info_modal: InfoModal,
     pub(super) btw_modal: BtwModal,
     pub(super) memory_modal: MemoryModal,
     pub(super) search_modal: SearchModal,
@@ -198,6 +200,7 @@ impl App {
             session_picker: SessionPicker::new(),
             rewind_picker: RewindPicker::new(),
             help_modal: HelpModal::new(),
+            info_modal: InfoModal::new(),
             btw_modal: BtwModal::new(ui_config.typewriter_ms_per_char),
             memory_modal: MemoryModal::new(),
             search_modal: SearchModal::new(),
@@ -479,6 +482,11 @@ impl App {
 
         if self.help_modal.is_open() {
             self.help_modal.handle_key(key);
+            return vec![];
+        }
+
+        if self.info_modal.is_open() {
+            self.info_modal.handle_key(key);
             return vec![];
         }
 
@@ -1096,6 +1104,19 @@ impl App {
                 vec![]
             }
             "/exit" => self.quit(),
+            "/usage" => {
+                use maki_providers::provider::ProviderKind;
+                let provider = self.state.model.provider;
+                if !matches!(provider, ProviderKind::Zai | ProviderKind::ZaiCodingPlan) {
+                    self.flash("/usage is only available for Z.AI providers".into());
+                    return vec![];
+                }
+                match maki_providers::zai_usage::fetch_usage() {
+                    Ok(info) => self.info_modal.open(info),
+                    Err(e) => self.flash(format!("Usage error: {e}")),
+                }
+                vec![]
+            }
             name if name.starts_with("/project:") || name.starts_with("/user:") => {
                 self.execute_custom_command(name, &cmd.args)
             }
