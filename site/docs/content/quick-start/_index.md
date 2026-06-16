@@ -42,7 +42,7 @@ Or download a pre-built binary from [GitHub Releases](https://github.com/tontint
 
 ## API Keys
 
-Export a key for at least one provider (e.g. `ANTHROPIC_API_KEY`). Some providers support OAuth login instead via `maki auth login <provider>`.
+Export a key for at least one provider (e.g. `ANTHROPIC_API_KEY`). Use `maki auth login <provider>` from the CLI or `/login` from the TUI for interactive authentication.
 
 See [Providers](/docs/providers/) for the full list of supported providers, environment variables, and setup instructions.
 

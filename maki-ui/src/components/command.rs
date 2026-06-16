@@ -69,7 +69,7 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
     },
     BuiltinCommand {
         name: "/login",
-        description: "Authenticate with an LLM provider",
+        description: "Authenticate with an LLM provider (interactive UI)",
         max_args: 0,
     },
     BuiltinCommand {

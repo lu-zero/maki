@@ -13,7 +13,7 @@ Open the model picker with `/model` and press `1`, `2`, `3`, or `4` on any row t
 
 ## Auth Reloading
 
-Maki re-reads auth from storage and environment variables each time a new agent spawns (`/new`, retry, session load). If you run `maki auth login` in another terminal or change an env var, the next session picks it up without a restart.
+Maki re-reads auth from storage and environment variables each time a new agent spawns (`/new`, retry, session load). If you run `maki auth login` (for any provider) in another terminal, use the `/login` command in the TUI, or change an env var, the next session picks it up without a restart.
 
 You can set multiple API keys in one env var (`ANTHROPIC_API_KEY=sk-1,sk-2,sk-3`) and they rotate automatically on rate-limit or auth errors.
 
