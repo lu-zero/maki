@@ -267,6 +267,7 @@ mod tests {
         let expected: BTreeMap<&str, ToolAudience> = BTreeMap::from([
             (super::super::BATCH_TOOL_NAME, MAIN | RES | GEN),
             (super::super::CODE_EXECUTION_TOOL_NAME, MAIN | RES | GEN),
+            (super::super::CURRENT_MODEL_TOOL_NAME, MAIN),
             (super::super::TASK_TOOL_NAME, MAIN),
         ]);
 
