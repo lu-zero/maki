@@ -67,8 +67,8 @@ pub(crate) fn models() -> &'static [ModelEntry] {
                 cache_read: 0.00,
                 fast: None,
             },
-            max_output_tokens: 262_144,
-            context_window: 262_144,
+            max_output_tokens: 256_000,
+            context_window: 256_000,
         },
         ModelEntry {
             prefixes: &["mistral-small-latest", "mistral-small-2603"],
@@ -82,8 +82,8 @@ pub(crate) fn models() -> &'static [ModelEntry] {
                 cache_read: 0.00,
                 fast: None,
             },
-            max_output_tokens: 262_144,
-            context_window: 262_144,
+            max_output_tokens: 256_000,
+            context_window: 256_000,
         },
         ModelEntry {
             prefixes: &["ministral-14b-latest", "ministral-14b-2512"],
@@ -97,8 +97,8 @@ pub(crate) fn models() -> &'static [ModelEntry] {
                 cache_read: 0.00,
                 fast: None,
             },
-            max_output_tokens: 262_144,
-            context_window: 262_144,
+            max_output_tokens: 256_000,
+            context_window: 256_000,
         },
     ]
 }
