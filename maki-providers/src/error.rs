@@ -93,11 +93,29 @@ impl AgentError {
     pub fn user_message(&self) -> String {
         match self {
             Self::Config { message } => message.clone(),
-            Self::Api { status: 429, .. } => "rate limited, try again in a moment".into(),
+            Self::Api { status: 429, message } => {
+                let msg = message.to_lowercase();
+                if msg.contains("freeusagelimit") {
+                    "free models on the opencode zen catalog require the opencode client; \
+                     use opencode or add credits to your zen account at https://opencode.ai/zen"
+                        .into()
+                } else if message.trim().is_empty() {
+                    "rate limited, try again in a moment".into()
+                } else {
+                    format!("rate limited (429): {message}")
+                }
+            }
             Self::Api { status: 529, .. } => "provider is overloaded, try again later".into(),
             Self::Api { status, .. } if *status >= 500 => format!("server error ({status})"),
-            Self::Api { status: 401, .. } => {
-                "authentication failed, run `maki auth login` or check your API key".into()
+            Self::Api { status: 401, message } => {
+                if message.trim().is_empty() {
+                    "authentication failed (401), run `maki auth login` or check your API key"
+                        .into()
+                } else {
+                    format!(
+                        "authentication failed (401): {message}\nrun `maki auth login` or check your API key"
+                    )
+                }
             }
             Self::Api { status, message } => format!("API error ({status}): {message}"),
             Self::Tool { tool, message } => format!("{tool}: {message}"),
@@ -192,10 +210,10 @@ mod tests {
         assert_eq!(api(status).retry_message(), expected);
     }
 
-    #[test_case(429, "rate limited, try again in a moment"                              ; "user_msg_429")]
+    #[test_case(429, "rate limited (429): bad input" ; "user_msg_429")]
     #[test_case(529, "provider is overloaded, try again later"                           ; "user_msg_529")]
     #[test_case(500, "server error (500)"                                                 ; "user_msg_500")]
-    #[test_case(401, "authentication failed, run `maki auth login` or check your API key" ; "user_msg_401")]
+    #[test_case(401, "authentication failed (401): bad input\nrun `maki auth login` or check your API key" ; "user_msg_401")]
     #[test_case(400, "API error (400): bad input"                                         ; "user_msg_400")]
     fn user_message_api(status: u16, expected: &str) {
         let err = AgentError::Api {
@@ -208,6 +226,19 @@ mod tests {
     #[test]
     fn timeout_is_retryable() {
         assert!(AgentError::Timeout { secs: 30 }.is_retryable());
+    }
+
+    #[test]
+    fn user_msg_429_free_usage_limit() {
+        let err = AgentError::Api {
+            status: 429,
+            message: r#"{"type":"error","error":{"type":"FreeUsageLimitError","message":"Rate limit exceeded"}}"#.into(),
+        };
+        assert_eq!(
+            err.user_message(),
+            "free models on the opencode zen catalog require the opencode client; \
+             use opencode or add credits to your zen account at https://opencode.ai/zen"
+        );
     }
 
     // llama.cpp: https://github.com/ggml-org/llama.cpp/blob/master/tools/server/server-context.cpp

@@ -11,7 +11,7 @@ use crate::model::{Model, ModelInfo};
 use crate::provider::{BoxFuture, Provider};
 use crate::providers::anthropic::shared;
 use crate::providers::catalog::{
-    CatalogMeta, EndpointType, config_error, init_shared_catalog_if_needed,
+    CatalogMeta, EndpointType, config_error, init_shared_catalog_if_needed, is_free_model,
 };
 use crate::providers::http_client;
 use crate::providers::openai_compat::{OpenAiCompatConfig, OpenAiCompatProvider};
@@ -187,6 +187,14 @@ impl Provider for Opencode {
                 model_id.split_once('/').unwrap_or(("opencode", model_id));
 
             let (meta, api_format, auth) = self.lookup(sub_provider, actual_id).await?;
+
+            if is_free_model(&meta) {
+                return Err(AgentError::Config {
+                    message: "free models on the opencode zen catalog require the opencode client; \
+                         use opencode or add credits to your zen account at https://opencode.ai/zen"
+                        .to_string(),
+                });
+            }
 
             let mut buf = String::new();
             let system = with_prefix(&self.system_prefix, system, &mut buf);

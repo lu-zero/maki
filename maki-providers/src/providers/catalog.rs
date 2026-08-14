@@ -69,7 +69,7 @@ pub struct ProviderData {
     pub models: HashMap<String, CatalogMeta>,
 }
 
-fn is_free_model(meta: &CatalogMeta) -> bool {
+pub(crate) fn is_free_model(meta: &CatalogMeta) -> bool {
     meta.input_price == 0.0 && meta.output_price == 0.0
 }
 
@@ -173,7 +173,10 @@ impl ProviderData {
             .iter()
             .filter_map(|(model_id, meta)| {
                 let is_free = is_free_model(meta);
-                if is_free && !enable_free_models {
+                if is_free
+                    && (!enable_free_models
+                        || OPENCODE_FAMILY_SLUGS.contains(&self.slug.as_str()))
+                {
                     return None;
                 }
                 let allow_model = match &auth {
@@ -702,6 +705,16 @@ impl Provider for CatalogProvider {
                 ..model.clone()
             };
 
+            if is_free_model(meta)
+                && OPENCODE_FAMILY_SLUGS.contains(&self.data.slug.as_str())
+            {
+                return Err(AgentError::Config {
+                    message: "free models on the opencode zen catalog require the opencode client; \
+                         use opencode or add credits to your zen account at https://opencode.ai/zen"
+                        .to_string(),
+                });
+            }
+
             match self.data.api_format {
                 EndpointType::ChatCompletions => {
                     let mut body =
@@ -771,8 +784,11 @@ impl Provider for CatalogProvider {
                 .models
                 .iter()
                 .filter(|(_, meta)| match &self.auth {
-                    CatalogAuth::Keyed(_) => true,
-                    CatalogAuth::FreeOnly(_) => is_free_model(meta),
+                    CatalogAuth::Keyed(_) => {
+                        !(is_free_model(meta)
+                            && OPENCODE_FAMILY_SLUGS.contains(&self.data.slug.as_str()))
+                    }
+                    CatalogAuth::FreeOnly(_) => false,
                     CatalogAuth::Gated => false,
                 })
                 .map(|(model_id, meta)| meta.model_info(model_id))
@@ -1045,7 +1061,7 @@ mod tests {
             super::CatalogProvider::new(data, &state_dir, Timeouts::default(), true).unwrap();
         let models = smol::block_on(provider.list_models()).unwrap();
         let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
-        assert_eq!(ids, ["free-model"]);
+        assert!(ids.is_empty(), "free models are hidden from opencode providers");
     }
 
     #[test]
@@ -1056,9 +1072,8 @@ mod tests {
         let provider =
             super::CatalogProvider::new(data, &state_dir, Timeouts::default(), false).unwrap();
         let models = smol::block_on(provider.list_models()).unwrap();
-        let mut ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
-        ids.sort_unstable();
-        assert_eq!(ids, ["free-model", "paid-model"]);
+        let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["paid-model"]);
         unsafe { std::env::remove_var("MAKI_TEST_OPENCODE_GO_KEY_41827") };
     }
 
@@ -1634,7 +1649,7 @@ mod tests {
             opencode.build_auth(&state_dir),
             Authentication::OpenCodeFreeKey(_)
         ));
-        // all_models with OpenCodeFreeKey only shows free models; with enable_free_models=false, no models shown
+        // all_models with OpenCodeFreeKey: free models are hidden from opencode providers
         assert_eq!(result.all_models().len(), 0);
     }
 
@@ -1654,7 +1669,7 @@ mod tests {
             opencode.build_auth(&state_dir),
             Authentication::OpenCodeFreeKey(_)
         ));
-        // all_models filters both free (enable_free_models=false) and paid (OpenCodeFreeKey only shows free)
+        // all_models filters both free (hidden from opencode) and paid (OpenCodeFreeKey only shows free)
         assert_eq!(result.all_models().len(), 0);
     }
 
@@ -2092,8 +2107,6 @@ mod tests {
     #[test]
     fn catalog_all_models_public_fallback_shows_only_free() {
         let (_tmp, state_dir) = temp_state_dir();
-        // Provider with OPENCODE_API_KEY in env but no key set gets "public" fallback.
-        // Only free (zero-cost) models should appear in all_models.
         let mut models = HashMap::new();
         models.insert(
             "free-model".into(),
@@ -2136,7 +2149,6 @@ mod tests {
             },
         );
 
-        // No OPENCODE_API_KEY set in env — falls back to "public"
         let data = CatalogData::from_index(
             providers,
             true,
@@ -2144,18 +2156,13 @@ mod tests {
             ["opencode".to_string()].into_iter().collect(),
         );
 
-        // Both models are in providers
         let opencode = data.providers.get("opencode").unwrap();
         assert_eq!(opencode.models.len(), 2);
-        // But all_models only returns the free one
         let result = data.all_models();
-        assert_eq!(
-            result.len(),
-            1,
-            "public fallback should only show free models"
+        assert!(
+            result.is_empty(),
+            "free models are hidden from opencode providers"
         );
-        assert_eq!(result[0].id, "free-model");
-        assert_eq!(result[0].pricing.as_ref().unwrap().input, 0.0);
     }
 
     #[test]
