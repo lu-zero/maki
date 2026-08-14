@@ -73,6 +73,31 @@ fn is_free_model(meta: &CatalogMeta) -> bool {
     meta.input_price == 0.0 && meta.output_price == 0.0
 }
 
+/// The zen API key opencode's CLI stores for its `opencode` provider, so a user
+/// who registered through opencode gets maki to reuse the same credentials
+/// instead of falling back to the rate-limited `Bearer public` tier.
+fn opencode_zen_key() -> Option<String> {
+    let path = match std::env::var("MAKI_TEST_OPENCODE_AUTH") {
+        Ok(override_path) => std::path::PathBuf::from(override_path),
+        Err(_) => maki_storage::paths::opencode_auth_path()?,
+    };
+    read_opencode_zen_key(&path)
+}
+
+fn read_opencode_zen_key(path: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let auth: Value = serde_json::from_str(&text).ok()?;
+    let entry = auth.get("opencode")?;
+    if entry.get("type").and_then(Value::as_str) != Some("api") {
+        return None;
+    }
+    entry
+        .get("key")
+        .and_then(Value::as_str)
+        .filter(|key| !key.is_empty())
+        .map(String::from)
+}
+
 impl ProviderData {
     pub(crate) fn new(
         slug: String,
@@ -105,6 +130,12 @@ impl ProviderData {
         }
         if let Some(key) = self.load_key_from_storage(state_dir) {
             debug!(provider = %self.display_name, "api key resolved from storage");
+            return Some(key);
+        }
+        if self.slug == "opencode"
+            && let Some(key) = opencode_zen_key()
+        {
+            debug!(provider = %self.display_name, "api key resolved from opencode auth.json");
             return Some(key);
         }
         None
@@ -938,13 +969,18 @@ mod tests {
 
     use super::{
         Authentication, CatalogData, CatalogMeta, EndpointType, FREE_MODELS_OPT_IN, ProviderData,
-        StateDir, available_if_warm, determine_catalog_format,
+        StateDir, available_if_warm, determine_catalog_format, is_free_model,
+        read_opencode_zen_key,
     };
     use crate::model::{Model, ModelPricing};
     use crate::provider::Provider;
     use crate::providers::Timeouts;
     use crate::{AgentError, ModelFamily, ModelTier, RequestOptions};
     use test_case::test_case;
+
+    /// Serializes tests that point `MAKI_TEST_OPENCODE_AUTH` at different files,
+    /// since the env var is process-global and tests run in parallel.
+    static OPENCODE_AUTH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn new_rejects_no_auth() {
@@ -1266,7 +1302,7 @@ mod tests {
             models: HashMap::new(),
         };
         let provider_data = ProviderData::new(
-            "opencode".into(),
+            "opencode-go".into(),
             &provider,
             EndpointType::ChatCompletions,
             HashMap::new(),
@@ -1279,6 +1315,34 @@ mod tests {
             }
             _ => panic!("expected OpenCodeFreeKey"),
         }
+    }
+
+    #[test]
+    fn read_opencode_zen_key_api_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("auth.json");
+        std::fs::write(
+            &path,
+            r#"{"opencode":{"type":"api","key":"sk-zen-123"},"other":{"type":"api","key":"sk-x"}}"#,
+        )
+        .unwrap();
+        assert_eq!(read_opencode_zen_key(&path).as_deref(), Some("sk-zen-123"));
+    }
+
+    #[test]
+    fn read_opencode_zen_key_ignores_non_api_or_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("auth.json");
+        for body in [
+            r#"{"opencode":{"type":"oauth","key":"sk-x"}}"#,
+            r#"{"opencode":{"type":"api"}}"#,
+            r#"{"other":{"type":"api","key":"sk-x"}}"#,
+            r#"not json"#,
+        ] {
+            std::fs::write(&path, body).unwrap();
+            assert_eq!(read_opencode_zen_key(&path), None, "body: {body}");
+        }
+        assert_eq!(read_opencode_zen_key(&tmp.path().join("missing.json")), None);
     }
 
     #[test]
@@ -1310,6 +1374,44 @@ mod tests {
             _ => panic!("expected KeyBased"),
         }
         unsafe { std::env::remove_var("MAKI_TEST_AUTH_KEY") };
+    }
+
+    #[test]
+    fn catalog_provider_build_auth_opencode_zen_fallback() {
+        let _lock = OPENCODE_AUTH_LOCK.lock().unwrap();
+        let (_tmp, state_dir) = temp_state_dir();
+        let tmp = tempfile::tempdir().unwrap();
+        let auth_path = tmp.path().join("auth.json");
+        std::fs::write(
+            &auth_path,
+            r#"{"opencode":{"type":"api","key":"sk-zen-fallback"}}"#,
+        )
+        .unwrap();
+        unsafe { std::env::set_var("MAKI_TEST_OPENCODE_AUTH", &auth_path) };
+        let provider = CatalogProvider {
+            name: "Test".into(),
+            env: vec!["OPENCODE_API_KEY"]
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect(),
+            npm: "@ai-sdk/openai-compatible".into(),
+            api: None,
+            models: HashMap::new(),
+        };
+        let provider_data = ProviderData::new(
+            "opencode".into(),
+            &provider,
+            EndpointType::ChatCompletions,
+            HashMap::new(),
+        );
+        let auth = provider_data.build_auth(&state_dir);
+        match auth {
+            Authentication::KeyBased(resolved) => {
+                assert_eq!(resolved.headers[0].1, "Bearer sk-zen-fallback");
+            }
+            _ => panic!("expected KeyBased from opencode auth.json"),
+        }
+        unsafe { std::env::remove_var("MAKI_TEST_OPENCODE_AUTH") };
     }
 
     #[test]
@@ -1401,6 +1503,8 @@ mod tests {
 
     #[test]
     fn catalog_to_data_opencode_free_models_without_key() {
+        let _lock = OPENCODE_AUTH_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("MAKI_TEST_OPENCODE_AUTH", "/nonexistent/auth.json") };
         let (_tmp, state_dir) = temp_state_dir();
         let mut models = HashMap::new();
         models.insert(
@@ -1463,51 +1567,35 @@ mod tests {
     #[test_case("free-model", true; "free_opencode_model_is_free")]
     #[test_case("paid-output-model", false; "free_input_paid_output_is_not_free")]
     fn model_is_free_uses_catalog_definition(model_id: &str, expected: bool) {
-        let (_tmp, state_dir) = temp_state_dir();
-        let models = HashMap::from([
+        let models: HashMap<String, CatalogMeta> = HashMap::from([
             (
                 "free-model".into(),
-                CatalogModel {
-                    limit: None,
-                    cost: Some(CatalogCost {
-                        input: Some(0.0),
-                        output: Some(0.0),
-                        cache_read: None,
-                        cache_write: None,
-                    }),
-                    provider: None,
-                    ..Default::default()
+                CatalogMeta {
+                    context: 0,
+                    output: 0,
+                    input_price: 0.0,
+                    output_price: 0.0,
+                    cache_read: 0.0,
+                    cache_write: 0.0,
+                    supports_thinking: false,
+                    supports_vision: false,
                 },
             ),
             (
                 "paid-output-model".into(),
-                CatalogModel {
-                    limit: None,
-                    cost: Some(CatalogCost {
-                        input: Some(0.0),
-                        output: Some(25.0),
-                        cache_read: None,
-                        cache_write: None,
-                    }),
-                    provider: None,
-                    ..Default::default()
+                CatalogMeta {
+                    context: 0,
+                    output: 0,
+                    input_price: 0.0,
+                    output_price: 25.0,
+                    cache_read: 0.0,
+                    cache_write: 0.0,
+                    supports_thinking: false,
+                    supports_vision: false,
                 },
             ),
         ]);
-        let index: CatalogIndex = HashMap::from([(
-            "opencode".into(),
-            CatalogProvider {
-                name: "Opencode".into(),
-                env: vec!["OPENCODE_API_KEY".into()],
-                npm: "@ai-sdk/openai-compatible".into(),
-                api: Some("https://opencode.ai/zen/v1".into()),
-                models,
-            },
-        )]);
-        super::seed_catalog_for_tests(index, state_dir);
-
-        let model = super::Model::from_spec(&format!("opencode/{model_id}")).unwrap();
-        assert_eq!(model.is_free(), expected);
+        assert_eq!(is_free_model(&models[model_id]), expected);
     }
 
     #[test]
@@ -1620,6 +1708,8 @@ mod tests {
 
     #[test]
     fn catalog_to_data_opencode_hides_free_models_when_disabled() {
+        let _lock = OPENCODE_AUTH_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("MAKI_TEST_OPENCODE_AUTH", "/nonexistent/auth.json") };
         let (_tmp, state_dir) = temp_state_dir();
         let index = opencode_catalog_with_free_and_paid("unused");
         let result =
@@ -1640,6 +1730,8 @@ mod tests {
 
     #[test]
     fn catalog_to_data_opencode_no_models_without_key_when_disabled() {
+        let _lock = OPENCODE_AUTH_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("MAKI_TEST_OPENCODE_AUTH", "/nonexistent/auth.json") };
         let (_tmp, state_dir) = temp_state_dir();
         let index = opencode_catalog_with_free_and_paid("unused");
         let result =
@@ -2091,6 +2183,8 @@ mod tests {
 
     #[test]
     fn catalog_all_models_public_fallback_shows_only_free() {
+        let _lock = OPENCODE_AUTH_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("MAKI_TEST_OPENCODE_AUTH", "/nonexistent/auth.json") };
         let (_tmp, state_dir) = temp_state_dir();
         // Provider with OPENCODE_API_KEY in env but no key set gets "public" fallback.
         // Only free (zero-cost) models should appear in all_models.

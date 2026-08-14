@@ -241,6 +241,14 @@ pub fn cache_dir() -> Result<PathBuf, std::io::Error> {
     ensure(&p.cache)
 }
 
+/// Path to opencode's `auth.json`, where the opencode CLI stores the zen API
+/// key maki reuses for its `opencode` catalog provider when the user has no
+/// `OPENCODE_API_KEY` of their own.
+pub fn opencode_auth_path() -> Option<PathBuf> {
+    let s = etcetera::choose_base_strategy().ok()?;
+    Some(s.data_dir().join("opencode").join("auth.json"))
+}
+
 pub struct XdgPaths {
     pub config: PathBuf,
     pub state: PathBuf,
