@@ -32,6 +32,10 @@ use crate::providers::tensorx::TensorX;
 use crate::providers::zai::Zai;
 use crate::{AgentError, Message, ProviderEvent, ProviderUsage, RequestOptions, StreamResponse};
 
+/// Providers whose live model lists are authoritative and must not be merged
+/// with static tables (stale entries and ID-style conflicts surface as dupes).
+const LIVE_LIST_ONLY: &[&str] = &["mistral", "zai"];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, EnumString, EnumIter)]
 #[strum(serialize_all = "kebab-case")]
 pub enum ProviderKind {
@@ -431,11 +435,13 @@ pub async fn fetch_all_models(
                     let mut specs: Vec<String> =
                         models.iter().map(|m| format!("{slug}/{}", m.id)).collect();
                     crate::model_registry::set_known_models(slug, models);
-                    for entry in manifest.models {
-                        for prefix in entry.prefixes {
-                            let spec = format!("{slug}/{prefix}");
-                            if !specs.contains(&spec) {
-                                specs.push(spec);
+                    if !LIVE_LIST_ONLY.contains(&slug) {
+                        for entry in manifest.models {
+                            for prefix in entry.prefixes {
+                                let spec = format!("{slug}/{prefix}");
+                                if !specs.contains(&spec) {
+                                    specs.push(spec);
+                                }
                             }
                         }
                     }
