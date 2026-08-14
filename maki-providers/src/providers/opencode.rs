@@ -65,10 +65,16 @@ impl Opencode {
     }
 
     async fn do_list_models(&self) -> Result<Vec<ModelInfo>, AgentError> {
-        Ok(
-            smol::unblock(move || init_shared_catalog_if_needed().lock().unwrap().all_models())
-                .await,
-        )
+        let models = smol::unblock(move || {
+            init_shared_catalog_if_needed().lock().unwrap().all_models()
+        })
+        .await;
+        debug!(
+            source = "shared catalog",
+            count = models.len(),
+            "opencode models listed from local catalog"
+        );
+        Ok(models)
     }
 
     #[allow(clippy::too_many_arguments)]
