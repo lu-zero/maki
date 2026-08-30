@@ -1339,12 +1339,16 @@ print(r.input_tokens .. " input, " .. r.output_tokens .. " output tokens")
 ### `Session:close()` {#Session-close}
 
 ```lua
-Session:close()
+Session:close({err?})
 ```
 
 Close the session and flush its history back to the parent agent. You can
 call this multiple times safely. If you forget, it runs automatically when
 the session is garbage collected.
+
+**Parameters:**
+
+- `{err?}` (`string?`) Pass the failure reason when the run failed, so the session's UI item ends as errored even without a following tool result.
 
 
 ## maki.async {#maki-async}

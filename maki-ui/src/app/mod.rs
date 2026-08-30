@@ -1119,14 +1119,21 @@ impl App {
         if let AgentEvent::SubagentHistory {
             tool_use_id,
             messages,
+            failed,
         } = envelope.event
         {
             // Workflow sessions use synthetic ids that no ToolDone will match,
-            // so we finish them here on SubagentHistory. This event only knows
-            // that the transcript closed, so say Unknown and leave the verdict
-            // to the ToolDone that follows elsewhere.
+            // so we finish them here on SubagentHistory. Without a verdict it
+            // only knows that the transcript closed, so say Unknown and leave
+            // the outcome to the ToolDone that follows elsewhere; a detached
+            // (background) session closes with its own verdict.
             if let Some(&sub_idx) = self.chat_index.get(tool_use_id.as_str()) {
-                self.chats[sub_idx].mark_finished(TaskOutcome::Unknown, DONE_TEXT);
+                let outcome = if failed {
+                    TaskOutcome::Error
+                } else {
+                    TaskOutcome::Unknown
+                };
+                self.chats[sub_idx].mark_finished(outcome, DONE_TEXT);
             }
             self.state
                 .session_mut()
@@ -1161,12 +1168,16 @@ impl App {
                 .session_mut()
                 .insert_tool_output(e.id.clone(), e.output.clone());
             if let Some(&sub_idx) = self.chat_index.get(&e.id) {
-                let (outcome, text) = if e.is_error {
-                    (TaskOutcome::Error, ERROR_TEXT)
+                if e.annotation.as_deref() == Some(maki_agent::tools::TASK_HANDOFF_ANNOTATION) {
+                    self.chats[sub_idx].mark_detached();
                 } else {
-                    (TaskOutcome::Done, DONE_TEXT)
-                };
-                self.chats[sub_idx].mark_finished(outcome, text);
+                    let (outcome, text) = if e.is_error {
+                        (TaskOutcome::Error, ERROR_TEXT)
+                    } else {
+                        (TaskOutcome::Done, DONE_TEXT)
+                    };
+                    self.chats[sub_idx].mark_finished(outcome, text);
+                }
             }
         }
 
@@ -1248,7 +1259,7 @@ impl App {
                 ChatEventResult::Done => {
                     self.status_bar.clear_flash();
                     self.terminalize_turn(MISSING_TOOL_COMPLETION);
-                    self.chat_index.clear();
+                    self.retain_detached_subagents();
                     self.subagent_answers.clear();
                     self.status = Status::Idle;
                     if self.exit_on_done {
@@ -1263,6 +1274,11 @@ impl App {
                     self.recoverable_queue = self.queue.text_messages();
                     self.queue.clear();
                     self.chat_index.clear();
+                    self.retain_detached_subagents();
+                    self.fire_session_autocmd(
+                        "TurnError",
+                        serde_json::json!({ "message": message }),
+                    );
                     if self.exit_on_done {
                         self.exit_request = ExitRequest::Error;
                     }
@@ -1728,14 +1744,23 @@ impl App {
     /// completed.
     fn retain_resolved_subagents(&mut self, outcome: TaskOutcome, text: &str) {
         self.chat_index.retain(|_, &mut sub_idx| {
-            if self.chats[sub_idx].is_finished() {
+            let chat = &mut self.chats[sub_idx];
+            if chat.is_detached() || chat.is_finished() {
                 true
             } else {
-                self.chats[sub_idx].mark_finished(outcome, text);
+                chat.mark_finished(outcome, text);
                 false
             }
         });
         self.sync_subagents();
+    }
+
+    /// Keeps only the detached (background) subagents routable across the turn
+    /// boundary; their items are still live while newer turns already ran.
+    /// Prunes silently: the janitor already synced the persisted set.
+    fn retain_detached_subagents(&mut self) {
+        self.chat_index
+            .retain(|_, &mut sub_idx| self.chats[sub_idx].is_detached());
     }
 
     pub fn flush_all_chats(&mut self) {
