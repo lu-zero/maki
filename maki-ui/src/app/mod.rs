@@ -17,7 +17,7 @@ pub(crate) mod tasks;
 pub(crate) mod tests;
 pub(crate) mod view;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -254,6 +254,10 @@ pub struct App {
     pub(crate) restore_event_tx: Option<maki_agent::EventSender>,
     pub(super) restoring: Arc<AtomicBool>,
     subagent_answers: HashMap<String, flume::Sender<String>>,
+    /// Receipts whose annotated ToolDone beat the session's first envelope:
+    /// the chat does not exist yet, so the handoff is parked here until the
+    /// chat is born.
+    detached_receipts: HashSet<String>,
 }
 
 impl App {
@@ -347,6 +351,7 @@ impl App {
             restore_event_tx: None,
             restoring: Arc::new(AtomicBool::new(false)),
             subagent_answers: HashMap::new(),
+            detached_receipts: HashSet::new(),
         };
         app.model_picker.set_recents(
             maki_storage::model::read_recents(&app.storage)
@@ -1130,6 +1135,8 @@ impl App {
             if let Some(&sub_idx) = self.chat_index.get(tool_use_id.as_str()) {
                 let outcome = if failed {
                     TaskOutcome::Error
+                } else if self.chats[sub_idx].is_detached() {
+                    TaskOutcome::Done
                 } else {
                     TaskOutcome::Unknown
                 };
@@ -1167,17 +1174,20 @@ impl App {
             self.state
                 .session_mut()
                 .insert_tool_output(e.id.clone(), e.output.clone());
-            if let Some(&sub_idx) = self.chat_index.get(&e.id) {
-                if e.annotation.as_deref() == Some(maki_agent::tools::TASK_HANDOFF_ANNOTATION) {
-                    self.chats[sub_idx].mark_detached();
-                } else {
-                    let (outcome, text) = if e.is_error {
-                        (TaskOutcome::Error, ERROR_TEXT)
-                    } else {
-                        (TaskOutcome::Done, DONE_TEXT)
-                    };
-                    self.chats[sub_idx].mark_finished(outcome, text);
+            if e.annotation.as_deref() == Some(maki_agent::tools::TASK_HANDOFF_ANNOTATION) {
+                match self.chat_index.get(&e.id) {
+                    Some(&sub_idx) => self.chats[sub_idx].mark_detached(),
+                    None => {
+                        self.detached_receipts.insert(e.id.clone());
+                    }
                 }
+            } else if let Some(&sub_idx) = self.chat_index.get(&e.id) {
+                let (outcome, text) = if e.is_error {
+                    (TaskOutcome::Error, ERROR_TEXT)
+                } else {
+                    (TaskOutcome::Done, DONE_TEXT)
+                };
+                self.chats[sub_idx].mark_finished(outcome, text);
             }
         }
 
@@ -1316,6 +1326,9 @@ impl App {
         chat.model_id = subagent.model.clone();
         if let Some(ref prompt) = subagent.prompt {
             chat.push_user_message(prompt);
+        }
+        if self.detached_receipts.remove(id) {
+            chat.mark_detached();
         }
         self.chats.push(chat);
         self.sync_subagents();
@@ -1735,7 +1748,9 @@ impl App {
         self.retain_resolved_subagents(TaskOutcome::Error, ERROR_TEXT);
         self.chats[0].fail_in_progress_except(message.into(), self.shell.active_ids());
         for chat in self.chats.iter_mut().skip(1) {
-            chat.fail_in_progress_with_message(message.into());
+            if !chat.is_detached() {
+                chat.fail_in_progress_with_message(message.into());
+            }
         }
     }
 
