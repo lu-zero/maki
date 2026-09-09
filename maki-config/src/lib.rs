@@ -67,6 +67,7 @@ pub const DEFAULT_BUILTINS: &[&str] = &[
     "index",
     "list",
     "memory",
+    "peak_hours",
     "question",
     "read",
     "sessions",

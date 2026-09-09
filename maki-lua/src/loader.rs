@@ -106,6 +106,10 @@ static BUNDLED_PLUGINS: &[BundledPlugin] = &[
         dir: include_dir!("$CARGO_MANIFEST_DIR/../plugins/memory"),
     },
     BundledPlugin {
+        name: "peak_hours",
+        dir: include_dir!("$CARGO_MANIFEST_DIR/../plugins/peak_hours"),
+    },
+    BundledPlugin {
         name: "task",
         dir: include_dir!("$CARGO_MANIFEST_DIR/../plugins/task"),
     },

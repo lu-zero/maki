@@ -267,6 +267,17 @@ maki.setup({
 |-------|------|---------|-----|-------------|
 | `max_file_size_mb` | integer | `2` | 1 | Refuse to index files larger than this many MB. |
 
+### `plugins.peak_hours`
+
+| Field | Type | Default | Min | Description |
+|-------|------|---------|-----|-------------|
+| `end_hour` | integer | `18` | 0 | Peak window end hour, exclusive. Z.AI coding plan is 18. |
+| `fallback` | string | `""` | - | Model spec to switch the focused session to during peak. Empty cancels instead. |
+| `providers` | string | `"zai"` | - | Comma-separated provider slugs to watch. Empty watches every provider. |
+| `start_hour` | integer | `14` | 0 | Peak window start hour, inclusive, in the offset below. Z.AI coding plan is 14. |
+| `utc_offset` | integer | `8` | -12 | Hours east of UTC for the window. Z.AI publishes peak in UTC+8. |
+| `weekdays_only` | boolean | `true` | - | If true, Saturday and Sunday are off-peak, matching the Z.AI coding plan. |
+
 ### `plugins.read`
 
 | Field | Type | Default | Min | Description |
