@@ -1198,6 +1198,18 @@ impl<'t> EventLoop<'t> {
                 };
                 let _ = reply_tx.send(idx.and_then(|idx| self.submit_text(idx, text)));
             }
+            SessionRequest::Cancel { id } => {
+                let reply = self.resolve_session_index(id.as_deref()).map(|idx| {
+                    if SessionStatus::of(&self.sessions[idx].app) == SessionStatus::Idle {
+                        json!("idle")
+                    } else {
+                        let actions = self.sessions[idx].app.handle_cancel();
+                        self.dispatch(idx, actions);
+                        json!("cancelled")
+                    }
+                });
+                let _ = reply_tx.send(reply);
+            }
             SessionRequest::Focus { id } => {
                 let reply = parse_session_id(&id)
                     .and_then(|id| self.focus_session(id))

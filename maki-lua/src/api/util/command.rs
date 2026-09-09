@@ -428,6 +428,9 @@ pub enum SessionRequest {
         id: Option<String>,
         text: String,
     },
+    Cancel {
+        id: Option<String>,
+    },
     Focus {
         id: String,
     },

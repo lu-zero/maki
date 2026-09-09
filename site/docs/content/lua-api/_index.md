@@ -3348,10 +3348,11 @@ end
 ## maki.session {#maki-session}
 
 Host session primitives. The interactive UI can run several sessions
-at once; these functions let plugins list, create, focus, rename, and
-delete them. Session management returns `nil, "no interactive UI
-attached"` without a UI. `notify` instead targets a live agent mailbox
-directly, so it also works under ACP and SDK frontends.
+at once; these functions let plugins list, create, focus, rename,
+delete them, and cancel a running turn. Session management returns
+`nil, "no interactive UI attached"` without a UI. `notify` instead
+targets a live agent mailbox directly, so it also works under ACP and
+SDK frontends.
 
 ---
 
@@ -3554,6 +3555,37 @@ the prompt is queued and picked up when the agent reaches it.
 
 ```lua
 local state, err = maki.session.prompt("run the tests", { session = id })
+```
+
+---
+
+### `maki.session.cancel()` {#maki-session-cancel}
+
+```lua
+maki.session.cancel({opts?})
+```
+
+Stops the current agent run on a live session, the same path Esc uses
+while a turn is streaming. An idle session answers `"idle"` and is left
+alone. A run that was actually stopped answers `"cancelled"`.
+
+Without an interactive UI this returns `nil, "no interactive UI attached"`.
+ACP clients already have `session/cancel` on the wire.
+
+**Parameters:**
+
+- `{opts?}` (`table?`) Optional fields: session (string) id of a live
+
+  session; defaults to the focused one.
+
+
+**Returns:** (`string|nil`, `string|nil`) "cancelled" or "idle", or nil and an error.
+
+**Example:**
+
+```lua
+maki.session.cancel()
+local state, err = maki.session.cancel({ session = id })
 ```
 
 ---
