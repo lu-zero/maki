@@ -1678,6 +1678,7 @@ mod tests {
             &CancelToken::none(),
             None,
             None,
+            false,
         ))
     }
 
