@@ -1516,6 +1516,7 @@ mod tests {
             opts: None,
             answer_tx,
             inbox: None,
+            detached: false,
         }
     }
 
