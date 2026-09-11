@@ -2081,6 +2081,7 @@ fn handoff_subagent(app: &mut App, id: &str) {
         is_error: false,
         annotation: Some(maki_agent::tools::TASK_HANDOFF_ANNOTATION.into()),
         written_path: None,
+        call: None,
     }))));
 }
 
