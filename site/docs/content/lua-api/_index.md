@@ -1815,11 +1815,11 @@ maki.async.sleep({ms})
 ```
 
 Suspend the calling task for {ms} milliseconds. Other tasks and the UI
-keep running, and a cancel still lands while you sleep.
+keep running. Cancelling the task ends the sleep early with an error.
 
 All plugins share one Lua thread. Code that runs for 5 seconds without
 yielding is stopped with an error. `sleep(0)` lets every other ready
-task run once, then returns. Call it now and then in long loops.
+task run once, then returns. Call it periodically in long loops.
 
 A repeating timer is a sleep loop inside `maki.async.spawn`. For a
 one-shot timer that outlives the tool call, such as a toast that
@@ -1827,14 +1827,16 @@ dismisses itself, use `maki.defer_fn`.
 
 **Parameters:**
 
-- `{ms}` (`integer`) Milliseconds to sleep. Zero only yields.
+- `{ms}` (`integer`) Milliseconds to wait. Negative values raise an error.
 
 **Example:**
 
 ```lua
-maki.async.run(function()
-  maki.async.sleep(4000)
-  win:close()
+maki.async.spawn(function()
+  while true do
+    poll()
+    maki.async.sleep(5000)
+  end
 end)
 
 -- A long loop that keeps the rest of maki responsive:
