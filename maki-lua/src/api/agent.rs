@@ -249,11 +249,12 @@ impl Upstream {
 
     /// The transcript as of now. A plugin task writes it after every prompt,
     /// so a monitor that dies with the process still leaves what it did.
-    fn send_history(&self, tool_use_id: &str, messages: Vec<Message>) {
+    fn send_history(&self, tool_use_id: &str, messages: Vec<Message>, failed: bool) {
         self.send_event(
             AgentEvent::SubagentHistory {
                 tool_use_id: tool_use_id.to_owned(),
                 messages,
+                failed,
             },
             None,
         );
@@ -1365,7 +1366,7 @@ impl SessionState {
             .is_some_and(|b| b.stopped.load(Ordering::Relaxed))
     }
 
-    fn close(&mut self) {
+    fn close(&mut self, failed: bool) {
         if self.closed {
             return;
         }
@@ -1375,7 +1376,7 @@ impl SessionState {
         let usage = self.params.ledger.totals().usage;
         let messages = std::mem::replace(&mut self.history, History::new(Vec::new())).into_vec();
         self.upstream
-            .send_history(&self.cancellation.ui_id, messages);
+            .send_history(&self.cancellation.ui_id, messages, failed);
         info!(
             name = %self.name,
             duration_ms = self.start.elapsed().as_millis() as u64,
@@ -1417,12 +1418,12 @@ impl Drop for LuaSession {
     fn drop(&mut self) {
         self.cancellation.cancel();
         match self.inner.try_lock() {
-            Some(mut s) => s.close(),
+            Some(mut s) => s.close(false),
             // Prompt still in flight: close asynchronously so history
             // and cancel entry are never silently leaked.
             None => {
                 let inner = Arc::clone(&self.inner);
-                smol::spawn(async move { inner.lock().await.close() }).detach();
+                smol::spawn(async move { inner.lock().await.close(false) }).detach();
             }
         }
     }
@@ -1583,7 +1584,7 @@ async fn prompt(
     // would otherwise keep it in memory until the plugin unloads.
     if s.background.is_some() {
         s.upstream
-            .send_history(&s.cancellation.ui_id, s.history.as_slice().to_vec());
+            .send_history(&s.cancellation.ui_id, s.history.as_slice().to_vec(), false);
     }
     // Only this call's messages count: older turns may hold stale preamble
     // text, and the agent loop's empty-response retry leaves a synthetic
@@ -1661,17 +1662,22 @@ async fn prompt(
 /// leaves the work to the Lua garbage collector, which may never run while
 /// the VM sits idle, and the subagent's event relay stays alive until it does.
 ///
-/// Close cancels a running prompt before waiting to flush its history. That
-/// prompt returns a cancelled error and any partial text.
+/// @param err string? Pass the failure reason when the run failed, so the session's UI item ends as errored even without a following tool result.
+/// On a background session, `close` cancels a running prompt rather than
+/// waiting for it.
 ///
 /// @return
 #[lua_fn]
-async fn close(_lua: Lua, this: mlua::UserDataRef<LuaSession>) -> LuaResult<()> {
+async fn close(
+    lua: Lua,
+    this: mlua::UserDataRef<LuaSession>,
+    err: Option<String>,
+) -> LuaResult<()> {
     this.cancellation.cancel();
     let inner = Arc::clone(&this.inner);
     drop(this);
     let mut s = inner.lock().await;
-    s.close();
+    s.close(err.is_some());
     Ok(())
 }
 
@@ -2188,7 +2194,7 @@ mod tests {
     #[test]
     fn history_sent_to_the_parent_carries_its_run() {
         let (upstream, parent_rx) = parent_upstream();
-        upstream.send_history(PARENT_ID, Vec::new());
+        upstream.send_history(PARENT_ID, Vec::new(), false);
         let envelope = parent_rx.try_recv().unwrap();
         assert_eq!(envelope.run_id, RUN_ID);
         assert!(matches!(

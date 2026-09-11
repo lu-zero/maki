@@ -1714,7 +1714,7 @@ print(r.input_tokens .. " input, " .. r.output_tokens .. " output tokens")
 ### `Session:close()` {#Session-close}
 
 ```lua
-Session:close()
+Session:close({err?})
 ```
 
 Close the session and flush its history back to the parent agent. Calling
@@ -1724,8 +1724,12 @@ Close on every path, error paths included. Dropping the session instead
 leaves the work to the Lua garbage collector, which may never run while
 the VM sits idle, and the subagent's event relay stays alive until it does.
 
-Close cancels a running prompt before waiting to flush its history. That
-prompt returns a cancelled error and any partial text.
+**Parameters:**
+
+- `{err?}` (`string?`) Pass the failure reason when the run failed, so the session's UI item ends as errored even without a following tool result.
+
+On a background session, `close` cancels a running prompt rather than
+waiting for it.
 
 
 ## maki.async {#maki-async}
