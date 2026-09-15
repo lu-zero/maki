@@ -772,7 +772,8 @@ Built-in events fired by the host: `"TurnStart"`, `"TurnEnd"`,
 `"TurnError"`, `"ToolStart"`, `"ToolDone"`, `"AutoCompacting"`,
 `"CompactionDone"`, `"PlanReady"`, `"SessionReset"`, `"SessionEnd"`,
 `"SessionFocusChanged"`, `"SessionStatusChanged"`, `"TaskStatusChanged"`,
-`"TaskFocusChanged"`, and `"ModelChanged"`. Plugins can also fire their
+`"TaskFocusChanged"`, `"ModelChanged"`, `"JobStart"`, and
+`"JobExit"`. Plugins can also fire their
 own events with `exec_autocmds`.
 
 Every host event carries `data.session_id`. For `"SessionReset"` and
@@ -808,6 +809,10 @@ name the session now running or focused. What each event adds:
 - `"ModelChanged"`: `data.model` in the shape `maki.model.get` returns,
   plus `data.previous_spec`. Picking the model already in use stays
   quiet, and so does startup.
+- `"JobStart"`, `"JobExit"`: session-owned jobs (`scope = { session =
+  ... }`) only. Both carry `data.id`, `data.session`, and `data.plugin`;
+  `"JobStart"` adds `data.name` (absent when unnamed) and `data.command`,
+  `"JobExit"` adds `data.exit_code` (`-1` when the job was killed).
 
 `"TurnEnd"` fires once per turn and only for the main session, so
 subagent turns never show up. A manual `/compact` ends its run without
@@ -1858,10 +1863,8 @@ Requires the `run` [plugin permission](#plugin-permissions).
     (default 20, 0 disables, max 1024).
   - `name` (`string?`) handle for `jobfind`, unique among the live jobs this
     plugin can see. Starting a second job under a live name is an error.
-    Also the display name: the session's UI (the /tasks picker, the
-    transcript items, the status-bar count) shows it when present and
-    falls back to the command, so name long-running work even when you
-    never look it up.
+    Session jobs also show it in the /tasks picker and on the `JobStart`
+    autocmd, so name long-running work even when you never look it up.
 
 **Returns:** (`integer`) Job id.
 
@@ -5298,6 +5301,79 @@ shell, on terminals that support the title stack.
 maki.ui.set_window_title("maki: " .. session_name)
 -- Give the title back to the shell:
 maki.ui.set_window_title("")
+```
+
+---
+
+### `maki.ui.chat_item()` {#maki-ui-chat_item}
+
+```lua
+maki.ui.chat_item({opts})
+```
+
+Adds or updates a plugin-owned item in the chat transcript. Call it with
+`status = "running"` to surface the item with a spinner, then with
+`status = "done"` or `"failed"` to close it with a terminal status.
+Re-calling `chat_item` with the same `id` updates the item in place, so
+the title can track progress while the item runs.
+
+The id is scoped to the calling plugin: two plugins may use the same id
+without colliding.
+
+**Parameters:**
+
+- `{opts}` (`table`) `id` (string, unique within the plugin), `title`
+
+  (string, headline shown while the item runs), `label` (string, item
+
+
+  kind shown next to the status, e.g. `"monitor"`, default `"item"`),
+
+
+  `status` (`"running"` default, `"done"`, or `"failed"`), `detail`
+
+
+  (string, terminal text for `done` / `failed`, e.g. `"exited (code 0)"`).
+
+
+**Example:**
+
+```lua
+maki.ui.chat_item({ id = id, label = "monitor", title = cmd, status = "running" })
+maki.ui.chat_item({ id = id, status = "done", detail = "exited (code 0)" })
+```
+
+---
+
+### `maki.ui.status_segment()` {#maki-ui-status_segment}
+
+```lua
+maki.ui.status_segment({opts?})
+```
+
+Adds, updates, or removes one of the plugin's status bar segments, the
+short text spans shown on the right side of the bar. Pass `nil` instead
+of `opts` to drop every segment the plugin owns.
+
+**Parameters:**
+
+- `{opts?}` (`table|nil`) `id` (string, unique within the plugin), `text`
+
+  (string, segment text, rendered as `[ text ]`), `style` (string, theme
+
+
+  style name, default `"status_dim"`). `nil` drops every segment the
+
+
+  plugin owns.
+
+
+**Example:**
+
+```lua
+maki.ui.status_segment({ id = "jobs", text = "3 running" })
+maki.ui.status_segment({ id = "jobs" }) -- remove it
+maki.ui.status_segment(nil) -- remove all of this plugin's
 ```
 
 

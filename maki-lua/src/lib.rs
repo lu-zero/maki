@@ -17,9 +17,10 @@ pub use api::options::{OptionSpec, OptionType, PluginOptionSpecs};
 pub use api::pack::{Declared, PackOp};
 pub use api::session::SessionSnapshotFn;
 pub use api::util::command::{
-    Anchor, Axis, Border, BuiltinAction, Dimension, Edge, FloatConfig, FloatConfigPatch,
-    HintReader, HintSnapshot, LuaCommandInfo, LuaCommandReader, ModelRequest, SessionRequest,
-    Split, TaskRequest, TitlePos, UiAction, UiAttachment, UiReply, WinCommand, WinEvent, WinView,
+    Anchor, Axis, Border, BuiltinAction, ChatItem, ChatItemStatus, Dimension, Edge, FloatConfig,
+    FloatConfigPatch, HintReader, HintSnapshot, LuaCommandInfo, LuaCommandReader, ModelRequest,
+    SessionRequest, Split, StatusSegment, TaskRequest, TitlePos, UiAction, UiAttachment, UiReply,
+    WinCommand, WinEvent, WinView,
 };
 pub use docs::{DocKind, FnDoc, ModuleDoc, ParamDoc, api_docs};
 pub use error::PluginError;
