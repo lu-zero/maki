@@ -19,9 +19,9 @@ use maki_agent::tools::{
 };
 use maki_agent::types::ALLOWED_BY;
 use maki_agent::{
-    Agent, AgentEvent, AgentInput, AgentMode, AgentParams, AgentRunParams, AgentSeed, DoneReason,
-    DETACHED_RUN_ID, EMPTY_RESPONSE_MARKER, Envelope, EventSender, EventStreamGuard, History,
-    InputSource, McpSession, RunContext, RunContextBuilder, RunLedger, SessionEvents,
+    Agent, AgentEvent, AgentInput, AgentMode, AgentParams, AgentRunParams, AgentSeed,
+    DETACHED_RUN_ID, DoneReason, EMPTY_RESPONSE_MARKER, Envelope, EventSender, EventStreamGuard,
+    History, InputSource, McpSession, RunContext, RunContextBuilder, RunLedger, SessionEvents,
     SubagentInbox, SubagentInfo, ToolDoneEvent, UNAVAILABLE_RESULT, event_stream,
 };
 use maki_lua_macro::{lua_class, lua_fn, lua_table};
@@ -1787,12 +1787,18 @@ mod tests {
             if dispose {
                 drop(first.take::<LuaSession>().unwrap());
             } else {
-                close(lua.clone(), first.borrow().unwrap(), None).await.unwrap();
-                close(lua.clone(), first.borrow().unwrap(), None).await.unwrap();
+                close(lua.clone(), first.borrow().unwrap(), None)
+                    .await
+                    .unwrap();
+                close(lua.clone(), first.borrow().unwrap(), None)
+                    .await
+                    .unwrap();
             }
             let replacement = native_session(&lua, &ctx).await;
             if !dispose {
-                close(lua.clone(), first.borrow().unwrap(), None).await.unwrap();
+                close(lua.clone(), first.borrow().unwrap(), None)
+                    .await
+                    .unwrap();
             }
             for session in [sibling, replacement] {
                 assert!(
@@ -1805,7 +1811,9 @@ mod tests {
                         .child_cancel
                         .is_cancelled()
                 );
-                close(lua.clone(), session.borrow().unwrap(), None).await.unwrap();
+                close(lua.clone(), session.borrow().unwrap(), None)
+                    .await
+                    .unwrap();
             }
         });
     }
@@ -1962,7 +1970,9 @@ mod tests {
             let (_, error) = prompt(lua.clone(), sess.borrow().unwrap(), CHILD_REQUEST.into())
                 .await
                 .unwrap();
-            close(lua.clone(), sess.borrow().unwrap(), None).await.unwrap();
+            close(lua.clone(), sess.borrow().unwrap(), None)
+                .await
+                .unwrap();
             assert!(error.is_none(), "{error:?}");
         });
         assert_eq!(
