@@ -2790,7 +2790,11 @@ mod tests {
             .iter()
             .map(|s| s.id)
             .collect();
-        assert_eq!(from_task_plugin, [monitor], "session filter crosses plugins");
+        assert_eq!(
+            from_task_plugin,
+            [monitor],
+            "session filter crosses plugins"
+        );
 
         let from_monitor: Vec<u32> = store
             .list(Some(other), None, "monitor")
