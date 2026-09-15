@@ -150,7 +150,8 @@ fn parse_string_or_seq(value: Value, what: &str) -> LuaResult<Vec<String>> {
 /// `"TurnError"`, `"ToolStart"`, `"ToolDone"`, `"AutoCompacting"`,
 /// `"CompactionDone"`, `"PlanReady"`, `"SessionReset"`, `"SessionEnd"`,
 /// `"SessionFocusChanged"`, `"SessionStatusChanged"`, `"TaskStatusChanged"`,
-/// `"TaskFocusChanged"`, and `"ModelChanged"`. Plugins can also fire their
+/// `"TaskFocusChanged"`, `"ModelChanged"`, `"JobStart"`, and
+/// `"JobExit"`. Plugins can also fire their
 /// own events with `exec_autocmds`.
 ///
 /// Every host event carries `data.session_id`. For `"SessionReset"` and
@@ -186,6 +187,10 @@ fn parse_string_or_seq(value: Value, what: &str) -> LuaResult<Vec<String>> {
 /// - `"ModelChanged"`: `data.model` in the shape `maki.model.get` returns,
 ///   plus `data.previous_spec`. Picking the model already in use stays
 ///   quiet, and so does startup.
+/// - `"JobStart"`, `"JobExit"`: session-owned jobs (`scope = { session =
+///   ... }`) only. Both carry `data.id`, `data.session`, and `data.plugin`;
+///   `"JobStart"` adds `data.name` (absent when unnamed) and `data.command`,
+///   `"JobExit"` adds `data.exit_code` (`-1` when the job was killed).
 ///
 /// `"TurnEnd"` fires once per turn and only for the main session, so
 /// subagent turns never show up. A manual `/compact` ends its run without
