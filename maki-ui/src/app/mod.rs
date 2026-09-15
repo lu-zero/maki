@@ -17,7 +17,7 @@ pub(crate) mod tasks;
 pub(crate) mod tests;
 pub(crate) mod view;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::mem;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -65,9 +65,10 @@ use maki_agent::{
 use maki_config::project::{self, GatedFile, TrustQuestion};
 use maki_config::{ModelPolicy, UiConfig};
 use maki_lua::{
-    BuiltinAction, EventHandle, HintReader, HintSnapshot, InputEdit, Key, KeymapReader,
+    BuiltinAction, ChatItem, EventHandle, HintReader, HintSnapshot, InputEdit, Key, KeymapReader,
     LuaCommandReader, PLAN_FORM_SLOT_DEADLINE, PLAN_ROW_HANDLER_DEADLINE, PackCommand,
-    PackPreparation, PlanActionOutcome, PlanMenu, PlanRowAction, WinView, is_reserved,
+    PackPreparation, PlanActionOutcome, PlanMenu, PlanRowAction, StatusSegment, WinView,
+    is_reserved,
 };
 use maki_providers::{ContentBlock, Message, Model, ThinkingConfig, add_cost};
 use maki_storage::StateDir;
@@ -422,6 +423,7 @@ pub struct App {
     /// the chat does not exist yet, so the handoff is parked here until the
     /// chat is born.
     detached_receipts: HashSet<String>,
+    status_segments: BTreeMap<Arc<str>, StatusSegment>,
 }
 
 impl App {
@@ -525,6 +527,7 @@ impl App {
             restoring: Arc::new(AtomicBool::new(false)),
             subagent_answers: HashMap::new(),
             detached_receipts: HashSet::new(),
+            status_segments: BTreeMap::new(),
         };
         app.model_picker.set_recents(
             maki_storage::model::read_recents(&app.storage)
@@ -760,6 +763,19 @@ impl App {
     /// shows all of them rather than whichever was reported last.
     pub(crate) fn queue_flash(&mut self, msg: String) {
         self.status_bar.queue_flash(msg);
+    }
+
+    pub(crate) fn handle_chat_item(&mut self, item: &ChatItem) {
+        self.main_chat().apply_chat_item(item);
+    }
+
+    pub(crate) fn set_status_segment(&mut self, segment: StatusSegment) {
+        let id = segment.id.clone();
+        self.status_segments.insert(id, segment);
+    }
+
+    pub(crate) fn clear_status_segments(&mut self, plugin: &str) {
+        self.status_segments.retain(|id, _| !id.starts_with(plugin));
     }
 
     pub(crate) fn fire_session_autocmd(&self, event: &str, mut data: serde_json::Value) {
