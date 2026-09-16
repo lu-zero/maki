@@ -12,6 +12,9 @@ local BAD_ICON = "✗ "
 local RUNNING_SECTION = "Running"
 local JOBS_SECTION = "Jobs"
 local FINISHED_SECTION = "Finished"
+local ELAPSED_UNITS = { { 3600, "h" }, { 60, "m" } }
+local UNDER_A_MINUTE = "<1m"
+local JOB_INDENT = "  "
 
 local M = {}
 
@@ -32,7 +35,9 @@ end
 function M.build(tasks, jobs, query)
   local words = ListPicker.split_words(query)
   local main, running, finished = nil, {}, {}
+  local task_by_id = {}
   for _, task in ipairs(tasks) do
+    task_by_id[task.id] = task
     if ListPicker.matches(task.name, words) then
       if not task.status then
         main = task
@@ -44,13 +49,33 @@ function M.build(tasks, jobs, query)
     end
   end
 
-  local live_jobs, exited_jobs = {}, {}
+  -- A job matches on its own text or on its spawner's name, so filtering by
+  -- the subagent keeps its jobs visible.
+  local main_live, main_exited = {}, {}
+  local sub_live, sub_exited = {}, {}
+  local orphan_ids = {}
   for _, job in ipairs(jobs or {}) do
-    if ListPicker.matches(job.name or job.command, words) then
-      if job.status == "running" then
-        live_jobs[#live_jobs + 1] = job
+    local spawner = job.spawned_by and task_by_id[job.spawned_by]
+    local matches = ListPicker.matches(job.name or job.command, words)
+      or (spawner ~= nil and ListPicker.matches(spawner.name, words))
+    if matches then
+      local live, exited, key
+      if job.spawned_by then
+        live, exited, key = sub_live, sub_exited, job.spawned_by
+        if not spawner and not sub_live[key] and not sub_exited[key] then
+          orphan_ids[#orphan_ids + 1] = key
+        end
       else
-        exited_jobs[#exited_jobs + 1] = job
+        live, exited, key = main_live, main_exited, "main"
+      end
+      if job.status == "running" then
+        live[key] = live[key] or {}
+        local bucket = live[key]
+        bucket[#bucket + 1] = job
+      else
+        exited[key] = exited[key] or {}
+        local bucket = exited[key]
+        bucket[#bucket + 1] = job
       end
     end
   end
@@ -59,29 +84,77 @@ function M.build(tasks, jobs, query)
   if main then
     rows[#rows + 1] = { task = main }
   end
-  -- Task sections are newest-first. Job sections keep list order, and an
-  -- exited group repeats the Jobs header only when the live half is empty.
-  local function append_section(header, items, key, newest_first)
-    local n = #items
-    local from, to, step = 1, n, 1
-    if newest_first then
-      from, to, step = n, 1, -1
-    end
-    local first = true
-    for i = from, to, step do
-      rows[#rows + 1] = { [key] = items[i], section = first and header or nil }
-      first = false
+  local function append_tasks(items, header)
+    for i = #items, 1, -1 do
+      rows[#rows + 1] = { task = items[i], section = i == #items and header or nil }
     end
   end
-  append_section(RUNNING_SECTION, running, "task", true)
-  append_section(JOBS_SECTION, live_jobs, "job", false)
-  append_section(#live_jobs == 0 and JOBS_SECTION or nil, exited_jobs, "job", false)
-  append_section(FINISHED_SECTION, finished, "task", true)
+  append_tasks(running, RUNNING_SECTION)
+  -- Subagent job groups follow the Running tasks and precede the Finished
+  -- ones, mirroring where the flat Jobs section sat. Group order matches the
+  -- task rows: newest running, then newest finished.
+  local task_order = {}
+  for i = #running, 1, -1 do
+    task_order[#task_order + 1] = running[i]
+  end
+  for i = #finished, 1, -1 do
+    task_order[#task_order + 1] = finished[i]
+  end
+  for _, task in ipairs(task_order) do
+    local live = sub_live[task.id] or {}
+    local exited = sub_exited[task.id] or {}
+    if #live + #exited > 0 then
+      local header = JOB_INDENT .. task.name
+      for _, job in ipairs(live) do
+        rows[#rows + 1] = { job = job, section = header }
+        header = nil
+      end
+      for _, job in ipairs(exited) do
+        rows[#rows + 1] = { job = job, section = header }
+        header = nil
+      end
+    end
+  end
+  -- A spawned_by id with no task row (the row is filtered out, or the host
+  -- never sent one) still gets its own group under the raw id.
+  for _, id in ipairs(orphan_ids) do
+    local live = sub_live[id] or {}
+    local exited = sub_exited[id] or {}
+    local header = JOB_INDENT .. id
+    for _, job in ipairs(live) do
+      rows[#rows + 1] = { job = job, section = header }
+      header = nil
+    end
+    for _, job in ipairs(exited) do
+      rows[#rows + 1] = { job = job, section = header }
+      header = nil
+    end
+  end
+  for _, group in ipairs({
+    { header = JOBS_SECTION, items = main_live.main or {}, key = "job" },
+    -- Same section as the live ones, so the header repeats only when a
+    -- filter emptied the live half.
+    { header = #(main_live.main or {}) == 0 and JOBS_SECTION or nil, items = main_exited.main or {}, key = "job" },
+  }) do
+    local header = group.header
+    for _, job in ipairs(group.items) do
+      rows[#rows + 1] = { [group.key] = job, section = header }
+      header = nil
+    end
+  end
+  append_tasks(finished, FINISHED_SECTION)
+  local job_count = #(main_live.main or {}) + #(main_exited.main or {})
+  for _, bucket in pairs(sub_live) do
+    job_count = job_count + #bucket
+  end
+  for _, bucket in pairs(sub_exited) do
+    job_count = job_count + #bucket
+  end
   return {
     rows = rows,
     sections = {
       running = #running,
-      jobs = #live_jobs + #exited_jobs,
+      jobs = job_count,
       finished = #finished,
     },
   }
