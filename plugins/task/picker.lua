@@ -13,6 +13,10 @@ local Rows = require("picker_rows")
 local TITLE = " Tasks "
 local FILTER_PREFIX = "❯ "
 local TICK_MS = 100
+local COLLAPSE_KEY = "tab"
+local COLLAPSE_OPEN = "▾ "
+local COLLAPSE_SHUT = "▸ "
+local JOB_TAG = "job"
 -- A placeholder frame. The host swaps "spinner:*" spans for the live one, so
 -- running rows spin without this plugin redrawing.
 local RUNNING_ICON = "· "
@@ -22,7 +26,7 @@ local RUNNING_COUNT_ICON = "● "
 local DONE_ICON = "✓ "
 local ERROR_ICON = "✗ "
 local NO_MATCHES_HINT = "  No matches"
-local FOOTER_KEYS = { { "Enter", "open" }, { "Esc", "cancel" } }
+local FOOTER_KEYS = { { "Enter", "open" }, { "Tab", "fold" }, { "Esc", "cancel" } }
 local HINT_KEY = "Ctrl+X"
 -- The main chat has no status, so it falls through to MAIN.
 local ICONS = {
@@ -104,9 +108,6 @@ local function render()
   local cursor_line = board.reserved
   local words = ListPicker.split_words(board.input:value())
   for _, row in ipairs(board.rows) do
-    if row.section then
-      lines[#lines + 1] = { { "  " .. row.section, "keybind_section" } }
-    end
     local selected = Rows.row_id(row) == board.sel_id
     local base = selected and "selected" or "item"
     local icon, icon_style, spinning
@@ -124,15 +125,31 @@ local function render()
       icon_style = "spinner:" .. icon_style
     end
     local name = Rows.row_name(row)
-    local line = { { "  ", base }, { icon, icon_style } }
+    local fold = ""
+    if row.job_count and row.job_count > 0 then
+      fold = row.collapsed and COLLAPSE_SHUT or COLLAPSE_OPEN
+    end
+    -- One indent step per nesting level, under the render gutter.
+    local gutter = string.rep("  ", row.depth + 1)
+    local line = { { gutter, base }, { icon, icon_style }, { fold, "dim" } }
     local match_style = selected and "match_selected" or "match"
     for _, span in ipairs(ListPicker.highlight_spans(name, words, base, match_style)) do
       line[#line + 1] = span
     end
     -- Rows with nothing on the right would otherwise end short of the border
     -- and read as padding on one side only, so the bar runs the full width.
-    local trail = board.width - 2 - dispw(icon) - dispw(name)
-    if trail > 0 then
+    -- A job says so on the right: that is how you tell it apart from a task.
+    local tag = row.job and JOB_TAG or nil
+    local trail = board.width - #gutter - dispw(icon) - dispw(fold) - dispw(name)
+    if tag then
+      local pad = trail - dispw(tag) - 2
+      if pad < 1 then
+        pad = 1
+      end
+      line[#line + 1] = { string.rep(" ", pad), base }
+      line[#line + 1] = { tag, selected and "selected" or "dim" }
+      line[#line + 1] = { "  ", base }
+    elseif trail > 0 then
       line[#line + 1] = { string.rep(" ", trail), base }
     end
     lines[#lines + 1] = line
@@ -239,6 +256,17 @@ local function open_selected()
   finish(true)
 end
 
+local function toggle_collapse()
+  local row = board.rows[Rows.index_of(board.rows, board.sel_id)]
+  if not row or not row.task or not row.job_count or row.job_count == 0 then
+    return
+  end
+  local id = Rows.row_id(row)
+  board.collapsed[id] = not board.collapsed[id] or nil
+  rebuild()
+  render()
+end
+
 local function handle_key(key)
   if key == "<C-c>" or key == "<C-x>" then
     finish(false)
@@ -260,6 +288,8 @@ local function handle_key(key)
     move_sel(page_size())
   elseif key == "<CR>" then
     open_selected()
+  elseif key == COLLAPSE_KEY then
+    toggle_collapse()
   elseif board.input:handle_key(key) ~= "ignored" then
     rebuild()
     render()
@@ -285,6 +315,8 @@ local function open()
     width = win.width,
     height = win.height,
     input = TextInput.new(),
+    -- Task ids whose job groups are folded shut.
+    collapsed = {},
     -- Owned by render(), the only place that knows how tall the query block
     -- ended up once it wrapped.
     reserved = 0,
