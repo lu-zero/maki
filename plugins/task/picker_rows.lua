@@ -1,7 +1,15 @@
 -- Row building for the /tasks picker in picker.lua: filtering, ordering and
--- sections, with no
--- host calls and no globals. Every refresh throws the old rows away and builds
--- them again, so nothing here can drift from the host list.
+-- nesting, with no host calls and no globals. Every refresh throws the old
+-- rows away and builds them again, so nothing here can drift from the host
+-- list.
+--
+-- The picker is one tree: Main at the root, subagents indented under it, and
+-- each node's command jobs nested right under it, running ones first.
+-- Running subagents come before finished ones, newest first within each.
+-- A job
+-- carries spawned_by (the task id of the subagent that started it, nil for
+-- the main chat), which is what decides where it nests. `collapsed` maps task
+-- ids with hidden jobs.
 
 local ListPicker = require("maki.list_picker")
 
@@ -9,26 +17,28 @@ local RUN_ICON = "· "
 local OK_ICON = "✓ "
 local BAD_ICON = "✗ "
 
-local RUNNING_SECTION = "Running"
-local JOBS_SECTION = "Jobs"
-local FINISHED_SECTION = "Finished"
 local ELAPSED_UNITS = { { 3600, "h" }, { 60, "m" } }
 local UNDER_A_MINUTE = "<1m"
-local JOB_INDENT = "  "
-
 local M = {}
 
--- The main chat comes first and has no status. The subagents follow, running
--- ones above finished ones so a long job never gets buried under the ones that
--- already returned. Each subagent's jobs render right under it, so a job a
--- subagent spawned stays visually attached to its spawner; the main chat's
--- jobs share the flat Jobs section. Within a task section, newest first
--- (`tasks` comes in chat order, which is spawn order), so the latest task is
--- the one at hand. Jobs stay in list order.
---
--- Returns { rows, sections }. A row carries a section header only when it opens
--- one, and `sections` counts what survived the filter.
-function M.build(tasks, jobs, query)
+local function bucket_count(live, exited, key)
+  return #(live[key] or {}) + #(exited[key] or {})
+end
+
+local function append_jobs(rows, live, exited, key, depth)
+  for _, job in ipairs(live[key] or {}) do
+    rows[#rows + 1] = { job = job, depth = depth }
+  end
+  for _, job in ipairs(exited[key] or {}) do
+    rows[#rows + 1] = { job = job, depth = depth }
+  end
+end
+
+-- Returns { rows, sections }. A task row owning jobs carries `job_count` and
+-- `collapsed`, so the picker can draw the collapse glyph and know the
+-- children are hidden; job rows carry `depth` only.
+function M.build(tasks, jobs, query, collapsed)
+  collapsed = collapsed or {}
   local words = ListPicker.split_words(query)
   local main, running, finished = nil, {}, {}
   local task_by_id = {}
@@ -49,7 +59,8 @@ function M.build(tasks, jobs, query)
   -- the subagent keeps its jobs visible.
   local main_live, main_exited = {}, {}
   local sub_live, sub_exited = {}, {}
-  local orphan_ids = {}
+  local orphan_ids, seen_sub = {}, {}
+  local job_count = 0
   for _, job in ipairs(jobs or {}) do
     local spawner = job.spawned_by and task_by_id[job.spawned_by]
     local matches = ListPicker.matches(job.name or job.command, words)
@@ -58,12 +69,14 @@ function M.build(tasks, jobs, query)
       local live, exited, key
       if job.spawned_by then
         live, exited, key = sub_live, sub_exited, job.spawned_by
-        if not spawner and not sub_live[key] and not sub_exited[key] then
+        if not spawner and not seen_sub[key] then
+          seen_sub[key] = true
           orphan_ids[#orphan_ids + 1] = key
         end
       else
         live, exited, key = main_live, main_exited, "main"
       end
+      job_count = job_count + 1
       if job.status == "running" then
         live[key] = live[key] or {}
         local bucket = live[key]
@@ -77,75 +90,40 @@ function M.build(tasks, jobs, query)
   end
 
   local rows = {}
-  if main then
-    rows[#rows + 1] = { task = main }
-  end
-  local function append_tasks(items, header)
-    for i = #items, 1, -1 do
-      rows[#rows + 1] = { task = items[i], section = i == #items and header or nil }
+  local function push_with_jobs(task, depth, live, exited, key)
+    local count = bucket_count(live, exited, key)
+    rows[#rows + 1] = {
+      task = task,
+      depth = depth,
+      job_count = count > 0 and count or nil,
+      collapsed = collapsed[task.id],
+    }
+    if not collapsed[task.id] then
+      append_jobs(rows, live, exited, key, depth + 1)
     end
   end
-  append_tasks(running, RUNNING_SECTION)
-  -- Subagent job groups follow the Running tasks and precede the Finished
-  -- ones, mirroring where the flat Jobs section sat. Group order matches the
-  -- task rows: newest running, then newest finished.
-  local task_order = {}
+
+  if main then
+    push_with_jobs(main, 0, main_live, main_exited, "main")
+  else
+    -- Main filtered out by the query; its jobs still have nowhere else to go.
+    append_jobs(rows, main_live, main_exited, "main", 0)
+  end
+  -- Running subagents before finished ones, newest first, each carrying its own jobs.
   for i = #running, 1, -1 do
-    task_order[#task_order + 1] = running[i]
+    local task = running[i]
+    push_with_jobs(task, 1, sub_live, sub_exited, task.id)
+  end
+  -- A spawned_by with no matching task row (the row is filtered out, or the
+  -- host never sent one) keeps its jobs listable under the raw id.
+  for _, id in ipairs(orphan_ids) do
+    append_jobs(rows, sub_live, sub_exited, id, 1)
   end
   for i = #finished, 1, -1 do
-    task_order[#task_order + 1] = finished[i]
+    local task = finished[i]
+    push_with_jobs(task, 1, sub_live, sub_exited, task.id)
   end
-  for _, task in ipairs(task_order) do
-    local live = sub_live[task.id] or {}
-    local exited = sub_exited[task.id] or {}
-    if #live + #exited > 0 then
-      local header = JOB_INDENT .. task.name
-      for _, job in ipairs(live) do
-        rows[#rows + 1] = { job = job, section = header }
-        header = nil
-      end
-      for _, job in ipairs(exited) do
-        rows[#rows + 1] = { job = job, section = header }
-        header = nil
-      end
-    end
-  end
-  -- A spawned_by id with no task row (the row is filtered out, or the host
-  -- never sent one) still gets its own group under the raw id.
-  for _, id in ipairs(orphan_ids) do
-    local live = sub_live[id] or {}
-    local exited = sub_exited[id] or {}
-    local header = JOB_INDENT .. id
-    for _, job in ipairs(live) do
-      rows[#rows + 1] = { job = job, section = header }
-      header = nil
-    end
-    for _, job in ipairs(exited) do
-      rows[#rows + 1] = { job = job, section = header }
-      header = nil
-    end
-  end
-  for _, group in ipairs({
-    { header = JOBS_SECTION, items = main_live.main or {}, key = "job" },
-    -- Same section as the live ones, so the header repeats only when a
-    -- filter emptied the live half.
-    { header = #(main_live.main or {}) == 0 and JOBS_SECTION or nil, items = main_exited.main or {}, key = "job" },
-  }) do
-    local header = group.header
-    for _, job in ipairs(group.items) do
-      rows[#rows + 1] = { [group.key] = job, section = header }
-      header = nil
-    end
-  end
-  append_tasks(finished, FINISHED_SECTION)
-  local job_count = #(main_live.main or {}) + #(main_exited.main or {})
-  for _, bucket in pairs(sub_live) do
-    job_count = job_count + #bucket
-  end
-  for _, bucket in pairs(sub_exited) do
-    job_count = job_count + #bucket
-  end
+
   return {
     rows = rows,
     sections = {
