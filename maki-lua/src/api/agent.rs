@@ -786,7 +786,7 @@ async fn session(
     // only ours on close instead of clearing the whole key.
     let cancel_slot = agent_ctx
         .subagent_cancels
-        .insert(ui_id.clone(), child_trigger);
+        .insert(ui_id.clone(), child_trigger, detached);
 
     let name = name.unwrap_or_default();
     let background = match owner {
