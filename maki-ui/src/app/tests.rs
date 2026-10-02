@@ -2059,6 +2059,7 @@ fn monitor_history(messages: Vec<Message>) -> AgentEvent {
     AgentEvent::SubagentHistory {
         tool_use_id: MONITOR_ID.into(),
         messages,
+        failed: false,
     }
 }
 

@@ -7664,9 +7664,10 @@ fn handed_over_history(
                 ..
             } if owner == session => match envelope.event {
                 AgentEvent::SubagentHistory {
-                    tool_use_id,
+                    tool_use_id: tid,
                     messages,
-                } if tool_use_id == id => Some(messages),
+                    ..
+                } if tid == id => Some(messages),
                 _ => None,
             },
             _ => panic!("only this chat session's task events go to the UI here"),

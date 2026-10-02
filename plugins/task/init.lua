@@ -394,7 +394,6 @@ local function handler(input, ctx)
   local sess, sess_err
   local ok, raised = pcall(function()
     sess, sess_err = maki.agent.session(ctx, session_opts)
->>>>>>> 0e1a5525 (feat(task): backgroundable subagents with task_result and task_wait)
   end)
   if not ok then
     permit:release()

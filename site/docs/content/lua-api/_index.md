@@ -1728,8 +1728,11 @@ the VM sits idle, and the subagent's event relay stays alive until it does.
 
 - `{err?}` (`string?`) Pass the failure reason when the run failed, so the session's UI item ends as errored even without a following tool result.
 
-On a background session, `close` cancels a running prompt rather than
-waiting for it.
+  On a background session, `close` cancels a running prompt rather than
+
+
+  waiting for it.
+
 
 
 ## maki.async {#maki-async}

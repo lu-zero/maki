@@ -24,7 +24,6 @@ use maki_agent::{
     InputSource, McpSession, RunContext, RunContextBuilder, RunLedger, SessionEvents,
     SubagentInbox, SubagentInfo, ToolDoneEvent, UNAVAILABLE_RESULT, event_stream,
 };
-};
 use maki_lua_macro::{lua_class, lua_fn, lua_table};
 use maki_providers::model::ModelTier;
 use maki_providers::provider;
@@ -930,7 +929,7 @@ async fn session(
     // only ours on close instead of clearing the whole key.
     let cancel_slot = agent_ctx
         .subagent_cancels
-        .insert(ui_id.clone(), child_trigger);
+        .insert(ui_id.clone(), child_trigger, detached);
 
     let cancellation = Arc::new(SessionCancellation {
         parent_cancels: Arc::clone(&agent_ctx.subagent_cancels),
@@ -1669,7 +1668,7 @@ async fn prompt(
 /// @return
 #[lua_fn]
 async fn close(
-    lua: Lua,
+    _lua: Lua,
     this: mlua::UserDataRef<LuaSession>,
     err: Option<String>,
 ) -> LuaResult<()> {
@@ -1788,12 +1787,12 @@ mod tests {
             if dispose {
                 drop(first.take::<LuaSession>().unwrap());
             } else {
-                close(lua.clone(), first.borrow().unwrap()).await.unwrap();
-                close(lua.clone(), first.borrow().unwrap()).await.unwrap();
+                close(lua.clone(), first.borrow().unwrap(), None).await.unwrap();
+                close(lua.clone(), first.borrow().unwrap(), None).await.unwrap();
             }
             let replacement = native_session(&lua, &ctx).await;
             if !dispose {
-                close(lua.clone(), first.borrow().unwrap()).await.unwrap();
+                close(lua.clone(), first.borrow().unwrap(), None).await.unwrap();
             }
             for session in [sibling, replacement] {
                 assert!(
@@ -1806,7 +1805,7 @@ mod tests {
                         .child_cancel
                         .is_cancelled()
                 );
-                close(lua.clone(), session.borrow().unwrap()).await.unwrap();
+                close(lua.clone(), session.borrow().unwrap(), None).await.unwrap();
             }
         });
     }
@@ -1858,6 +1857,7 @@ mod tests {
                     if let AgentEvent::SubagentHistory {
                         tool_use_id,
                         messages,
+                        ..
                     } = events.recv_async().await.unwrap().event
                     {
                         assert_eq!(tool_use_id, PARENT_ID);
@@ -1962,7 +1962,7 @@ mod tests {
             let (_, error) = prompt(lua.clone(), sess.borrow().unwrap(), CHILD_REQUEST.into())
                 .await
                 .unwrap();
-            close(lua.clone(), sess.borrow().unwrap()).await.unwrap();
+            close(lua.clone(), sess.borrow().unwrap(), None).await.unwrap();
             assert!(error.is_none(), "{error:?}");
         });
         assert_eq!(
