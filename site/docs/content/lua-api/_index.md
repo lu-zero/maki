@@ -2644,18 +2644,18 @@ Requires the `fs_read` [plugin permission](#plugin-permissions).
 **Parameters:**
 
 - `{path}` (`string`) Absolute or relative file path. `~/` is expanded to the home directory.
-- `{opts?}` (`table?`) `{ offset = integer, len = integer }` window to read. A negative
+- `{opts?}` (`table?`) `{ offset = integer, limit = integer }` window of lines to read.
 
-  `offset` counts back from the end of the file, so `{ offset = -1024 }` reads the
-
-
-  last 1024 bytes, and `len` caps how many bytes are read from `offset`. A window
+  `offset` is a 1-based line number; a negative `offset` counts back from the last
 
 
-  that splits a multibyte character replaces the broken sequence. Omit `opts` to
+  line, so `{ offset = -50 }` starts at the 50th line from the end. `limit` caps how
 
 
-  read the whole file.
+  many lines are read from `offset`; `0` or omitted reads every line from `offset`.
+
+
+  Omit `opts` to read the whole file.
 
 
 **Returns:** (`string?`, `string?`) File contents, or nil plus an error message.
@@ -2663,7 +2663,7 @@ Requires the `fs_read` [plugin permission](#plugin-permissions).
 **Example:**
 
 ```lua
-local tail = maki.fs.read("server.log", { offset = -4096 })
+local tail = maki.fs.read("server.log", { offset = -50 })
 ```
 
 ---
@@ -2671,10 +2671,10 @@ local tail = maki.fs.read("server.log", { offset = -4096 })
 ### `maki.fs.read_bytes()` {#maki-fs-read_bytes}
 
 ```lua
-maki.fs.read_bytes({path})
+maki.fs.read_bytes({path}, {opts?})
 ```
 
-Read the entire file at {path} as raw bytes, returned as a Luau buffer.
+Read the file at {path} as raw bytes, returned as a Luau buffer.
 Files larger than 512 MiB return nil plus an error message.
 Useful for binary files or when you need to pass the data to `maki.base64.encode`.
 
@@ -2683,6 +2683,16 @@ Requires the `fs_read` [plugin permission](#plugin-permissions).
 **Parameters:**
 
 - `{path}` (`string`) Absolute or relative file path. `~/` is expanded to the home directory.
+- `{opts?}` (`table?`) `{ offset = integer, len = integer }` window of bytes to read.
+
+  A negative `offset` counts back from the end of the file, so `{ offset = -1024 }`
+
+
+  reads the last 1024 bytes, and `len` caps how many bytes are read from `offset`.
+
+
+  Omit `opts` to read the whole file.
+
 
 **Returns:** (`buffer?`, `string?`) File bytes as a Luau buffer, or nil plus an error message.
 
