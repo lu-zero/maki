@@ -2635,8 +2635,10 @@ if err then return end
 maki.fs.read({path}, {opts?})
 ```
 
-Read the file at {path} as a UTF-8 string.
-Files over 512 MiB or not valid UTF-8 return nil plus an error message.
+Read the file at {path} as a UTF-8 string. Pass {opts} to read only some
+lines, such as the end of a log.
+Returns nil plus an error message if the text read is over 512 MiB or not
+valid UTF-8. Skipped lines do not count, so tailing a huge log works.
 Use `read_bytes` for binary files.
 
 Requires the `fs_read` [plugin permission](#plugin-permissions).
@@ -2644,26 +2646,19 @@ Requires the `fs_read` [plugin permission](#plugin-permissions).
 **Parameters:**
 
 - `{path}` (`string`) Absolute or relative file path. `~/` is expanded to the home directory.
-- `{opts?}` (`table?`) `{ offset = integer, len = integer }` window to read. A negative
-
-  `offset` counts back from the end of the file, so `{ offset = -1024 }` reads the
-
-
-  last 1024 bytes, and `len` caps how many bytes are read from `offset`. A window
-
-
-  that splits a multibyte character replaces the broken sequence. Omit `opts` to
-
-
-  read the whole file.
-
+- `{opts?}` (`table?`) `offset` is the 1-based line to start at (default 1). A negative value counts back from the end, so `-50` reads the last 50 lines. An offset past the end returns an empty string. `limit` is the max number of lines, `0` or omitted reads to the end.
 
 **Returns:** (`string?`, `string?`) File contents, or nil plus an error message.
 
 **Example:**
 
 ```lua
-local tail = maki.fs.read("server.log", { offset = -4096 })
+local text, err = maki.fs.read("config.toml")
+if err then
+  maki.log.warn("could not read config: " .. err)
+  return
+end
+local tail = maki.fs.read("server.log", { offset = -50 })
 ```
 
 ---
@@ -2671,18 +2666,20 @@ local tail = maki.fs.read("server.log", { offset = -4096 })
 ### `maki.fs.read_bytes()` {#maki-fs-read_bytes}
 
 ```lua
-maki.fs.read_bytes({path})
+maki.fs.read_bytes({path}, {opts?})
 ```
 
-Read the entire file at {path} as raw bytes, returned as a Luau buffer.
-Files larger than 512 MiB return nil plus an error message.
-Useful for binary files or when you need to pass the data to `maki.base64.encode`.
+Read the file at {path} as raw bytes in a Luau buffer. Pass {opts} to read
+a byte range.
+Returns nil plus an error message if the bytes read are over 512 MiB.
+Use it for binary files or data headed for `maki.base64.encode`.
 
 Requires the `fs_read` [plugin permission](#plugin-permissions).
 
 **Parameters:**
 
 - `{path}` (`string`) Absolute or relative file path. `~/` is expanded to the home directory.
+- `{opts?}` (`table?`) `offset` is the byte to start at (default 0). A negative value counts back from the end, so `-1024` reads the last 1024 bytes. `len` is the max number of bytes, omitted reads to the end.
 
 **Returns:** (`buffer?`, `string?`) File bytes as a Luau buffer, or nil plus an error message.
 
@@ -2692,6 +2689,7 @@ Requires the `fs_read` [plugin permission](#plugin-permissions).
 local buf, err = maki.fs.read_bytes("image.png")
 if err then return end
 local encoded = maki.base64.encode(buf)
+local header = maki.fs.read_bytes("image.png", { len = 8 })
 ```
 
 ---

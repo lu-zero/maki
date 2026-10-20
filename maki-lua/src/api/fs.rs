@@ -2,7 +2,9 @@ use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, FileType};
-use std::io::{Error as IoError, ErrorKind, Read, Result as IoResult};
+use std::io::{
+    BufRead, BufReader, Error as IoError, ErrorKind, Read, Result as IoResult, Seek, SeekFrom,
+};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,6 +24,7 @@ use crate::runtime::LUA_MEMORY_LIMIT;
 // limit: a read the VM cannot hold dies with a Lua memory error instead.
 const MAX_READ_BYTES: u64 = LUA_MEMORY_LIMIT as u64;
 const NON_UTF8_CONTENT_ERR: &str = "non-utf8 content; use read_bytes";
+const TAIL_SCAN_CHUNK: usize = 64 * 1024;
 
 pub(crate) fn expand_tilde(path: &str) -> PathBuf {
     maki_storage::paths::expand_tilde(Path::new(path))
@@ -120,16 +123,117 @@ async fn read_file(path: PathBuf, max_bytes: u64) -> IoResult<Vec<u8>> {
     .await
 }
 
-/// Read the file at {path} as a UTF-8 string.
-/// Files over 512 MiB or not valid UTF-8 return nil plus an error message.
+fn too_large() -> IoError {
+    IoError::new(
+        ErrorKind::FileTooLarge,
+        format!("file exceeds the {MAX_READ_BYTES}-byte read limit"),
+    )
+}
+
+/// Read a window of bytes from the file at `path`.
+///
+/// A negative `offset` counts back from the end of the file. `len` caps how many
+/// bytes are read; omit it to read to the end of the file.
+fn read_byte_window(path: &Path, offset: i64, len: Option<u64>) -> IoResult<Vec<u8>> {
+    let mut file = File::open(path)?;
+    let start = if offset < 0 {
+        file.metadata()?.len().saturating_sub(offset.unsigned_abs())
+    } else {
+        offset as u64
+    };
+    file.seek(SeekFrom::Start(start))?;
+
+    let mut buf = Vec::new();
+    file.take(len.unwrap_or(u64::MAX).min(MAX_READ_BYTES + 1))
+        .read_to_end(&mut buf)?;
+    if buf.len() as u64 > MAX_READ_BYTES {
+        return Err(too_large());
+    }
+    Ok(buf)
+}
+
+/// Byte offset where the last `lines` lines of `file` start, found by scanning
+/// back from the end in `chunk_size` reads. A trailing newline does not open a
+/// new line, so the last line of `a\nb\n` is `b\n`.
+fn tail_start(file: &mut File, size: u64, lines: u64, chunk_size: usize) -> IoResult<u64> {
+    let mut buf = vec![0; chunk_size];
+    let mut remaining = lines;
+    let mut end = size;
+    while end > 0 {
+        let len = end.min(chunk_size as u64) as usize;
+        let pos = end - len as u64;
+        file.seek(SeekFrom::Start(pos))?;
+        file.read_exact(&mut buf[..len])?;
+        let mut chunk = &buf[..len];
+        if end == size {
+            chunk = chunk.strip_suffix(b"\n").unwrap_or(chunk);
+        }
+        while let Some(newline) = chunk.iter().rposition(|&b| b == b'\n') {
+            remaining -= 1;
+            if remaining == 0 {
+                return Ok(pos + newline as u64 + 1);
+            }
+            chunk = &chunk[..newline];
+        }
+        end = pos;
+    }
+    Ok(0)
+}
+
+/// Read up to `limit` lines, failing once the returned text passes `MAX_READ_BYTES`.
+fn read_lines(mut reader: impl BufRead, limit: Option<u64>) -> IoResult<String> {
+    let mut out = Vec::new();
+    let mut taken = 0u64;
+    while limit.is_none_or(|l| taken < l) {
+        let budget = MAX_READ_BYTES + 1 - out.len() as u64;
+        if reader.by_ref().take(budget).read_until(b'\n', &mut out)? == 0 {
+            break;
+        }
+        if out.len() as u64 > MAX_READ_BYTES {
+            return Err(too_large());
+        }
+        taken += 1;
+    }
+    String::from_utf8(out).map_err(|_| IoError::new(ErrorKind::InvalidData, NON_UTF8_CONTENT_ERR))
+}
+
+/// Read a window of lines from the file at `path`.
+///
+/// `offset` is a 1-based line number; a negative `offset` counts back from the last
+/// line, so `-1` starts at the last line. `limit` caps how many lines are read;
+/// omit it to read every line from `offset`. The result holds the file's own text
+/// for those lines, so a window over the whole file equals a plain read. Skipped
+/// lines never count toward the read limit.
+fn read_line_window(
+    path: &Path,
+    offset: i64,
+    limit: Option<u64>,
+    tail_chunk_size: usize,
+) -> IoResult<String> {
+    let mut file = File::open(path)?;
+    if offset < 0 {
+        let size = file.metadata()?.len();
+        let start = tail_start(&mut file, size, offset.unsigned_abs(), tail_chunk_size)?;
+        file.seek(SeekFrom::Start(start))?;
+        return read_lines(BufReader::new(file.take(size - start)), limit);
+    }
+    let mut reader = BufReader::new(file);
+    for _ in 1..offset {
+        if reader.skip_until(b'\n')? == 0 {
+            break;
+        }
+    }
+    read_lines(reader, limit)
+}
+
+/// Read the file at {path} as a UTF-8 string. Pass {opts} to read only some
+/// lines, such as the end of a log.
+/// Returns nil plus an error message if the text read is over 512 MiB or not
+/// valid UTF-8. Skipped lines do not count, so tailing a huge log works.
 /// Use `read_bytes` for binary files.
 ///
 /// @param path string Absolute or relative file path. `~/` is expanded to the home directory.
-/// @param opts table? `{ offset = integer, len = integer }` window to read. A negative
-///   `offset` counts back from the end of the file, so `{ offset = -1024 }` reads the
-///   last 1024 bytes, and `len` caps how many bytes are read from `offset`. A window
-///   that splits a multibyte character replaces the broken sequence. Omit `opts` to
-///   read the whole file.
+/// @param opts table? `offset` is the 1-based line to start at (default 1). A negative value counts back from the end, so `-50` reads the last 50 lines. An offset past the end returns an empty string. `limit` is the max number of lines, `0` or omitted reads to the end.
 /// @return (string?, string?) File contents, or nil plus an error message.
 /// @example
 /// local text, err = maki.fs.read("config.toml")
@@ -137,68 +241,46 @@ async fn read_file(path: PathBuf, max_bytes: u64) -> IoResult<Vec<u8>> {
 ///   maki.log.warn("could not read config: " .. err)
 ///   return
 /// end
-/// @example
-/// local tail = maki.fs.read("server.log", { offset = -4096 })
+/// local tail = maki.fs.read("server.log", { offset = -50 })
 #[lua_fn(guard = FsRead)]
 async fn read(_lua: Lua, path: String, opts: Option<Table>) -> LuaResult<Pair<String>> {
     let abs = try_pair!(make_absolute(&path));
-    let window = match opts.as_ref() {
-        Some(t) => {
-            let offset: Option<i64> = t.get("offset")?;
-            let len: Option<u64> = t.get("len")?;
-            Some((offset.unwrap_or(0), len.unwrap_or(u64::MAX)))
-        }
-        None => None,
-    };
-    let Some((offset, len)) = window else {
+    let Some(opts) = opts.as_ref() else {
         let bytes = try_pair!(read_file(abs, MAX_READ_BYTES).await);
         return Ok(pair(
             String::from_utf8(bytes).map_err(|_| NON_UTF8_CONTENT_ERR),
         ));
     };
-    let too_large = || {
-        IoError::new(
-            ErrorKind::FileTooLarge,
-            format!("file exceeds the {MAX_READ_BYTES}-byte read limit"),
-        )
-    };
-    let text = smol::unblock(move || -> std::io::Result<String> {
-        use std::io::{Read, Seek, SeekFrom};
-        let mut file = std::fs::File::open(&abs)?;
-        let start = if offset < 0 {
-            file.metadata()?.len().saturating_sub(offset.unsigned_abs())
-        } else {
-            offset as u64
-        };
-        file.seek(SeekFrom::Start(start))?;
-        let mut buf = Vec::new();
-        file.take(len.min(MAX_READ_BYTES + 1)).read_to_end(&mut buf)?;
-        if buf.len() as u64 > MAX_READ_BYTES {
-            return Err(too_large());
-        }
-        Ok(String::from_utf8_lossy(&buf).into_owned())
-    })
-    .await;
-    match text {
-        Ok(s) => Ok((Some(s), None)),
-        Err(e) => Ok(err_pair(e)),
-    }
+    let offset: i64 = opts.get::<Option<i64>>("offset")?.unwrap_or(1);
+    let limit: Option<u64> = opts.get::<Option<u64>>("limit")?.filter(|l| *l > 0);
+    let text = smol::unblock(move || read_line_window(&abs, offset, limit, TAIL_SCAN_CHUNK)).await;
+    Ok(pair(text))
 }
 
-/// Read the entire file at {path} as raw bytes, returned as a Luau buffer.
-/// Files larger than 512 MiB return nil plus an error message.
-/// Useful for binary files or when you need to pass the data to `maki.base64.encode`.
+/// Read the file at {path} as raw bytes in a Luau buffer. Pass {opts} to read
+/// a byte range.
+/// Returns nil plus an error message if the bytes read are over 512 MiB.
+/// Use it for binary files or data headed for `maki.base64.encode`.
 ///
 /// @param path string Absolute or relative file path. `~/` is expanded to the home directory.
+/// @param opts table? `offset` is the byte to start at (default 0). A negative value counts back from the end, so `-1024` reads the last 1024 bytes. `len` is the max number of bytes, omitted reads to the end.
 /// @return (buffer?, string?) File bytes as a Luau buffer, or nil plus an error message.
 /// @example
 /// local buf, err = maki.fs.read_bytes("image.png")
 /// if err then return end
 /// local encoded = maki.base64.encode(buf)
+/// local header = maki.fs.read_bytes("image.png", { len = 8 })
 #[lua_fn(guard = FsRead)]
-async fn read_bytes(lua: Lua, path: String) -> LuaResult<Pair<Buffer>> {
+async fn read_bytes(lua: Lua, path: String, opts: Option<Table>) -> LuaResult<Pair<Buffer>> {
     let abs = try_pair!(make_absolute(&path));
-    let bytes = try_pair!(read_file(abs, MAX_READ_BYTES).await);
+    let bytes = match opts.as_ref() {
+        Some(opts) => {
+            let offset: i64 = opts.get::<Option<i64>>("offset")?.unwrap_or(0);
+            let len: Option<u64> = opts.get("len")?;
+            try_pair!(smol::unblock(move || read_byte_window(&abs, offset, len)).await)
+        }
+        None => try_pair!(read_file(abs, MAX_READ_BYTES).await),
+    };
     Ok((Some(lua.create_buffer(bytes)?), None))
 }
 
@@ -1153,6 +1235,8 @@ lua_table! {
 #[cfg(test)]
 mod tests {
     use std::fs::OpenOptions;
+    #[cfg(unix)]
+    use std::io::Write;
     use std::time::{Duration, Instant, SystemTime};
 
     use super::*;
@@ -1276,14 +1360,16 @@ mod tests {
         assert_eq!(err.as_deref(), Some(NON_UTF8_CONTENT_ERR));
     }
 
-    const WINDOW_LOG_CONTENT: &str = "head-tail-IGNORED\nmiddle\nthe-end";
-    const WINDOW_LOG_TAIL: &str = "the-end";
-    const WINDOW_LOG_WINDOW: &str = "tail";
+    const WINDOW_LOG_CONTENT: &str = "alpha\nbravo\ncharlie\ndelta";
+    const WINDOW_LOG_MIDDLE: &str = "bravo\ncharlie\n";
+    const WINDOW_LOG_TAIL: &str = "charlie\ndelta";
 
-    #[test_case(-7, None, WINDOW_LOG_TAIL; "negative_offset_reads_from_end")]
-    #[test_case(5, Some(4), WINDOW_LOG_WINDOW; "offset_and_len_read_a_window")]
-    #[test_case(-10_000, None, WINDOW_LOG_CONTENT; "window_larger_than_file_reads_all")]
-    fn read_window(offset: i64, len: Option<u64>, expected: &str) {
+    #[test_case(1, None, WINDOW_LOG_CONTENT; "first_line_reads_everything")]
+    #[test_case(2, Some(2), WINDOW_LOG_MIDDLE; "offset_and_limit_read_a_window")]
+    #[test_case(-2, None, WINDOW_LOG_TAIL; "negative_offset_reads_from_end")]
+    #[test_case(-100, None, WINDOW_LOG_CONTENT; "offset_beyond_the_start_reads_everything")]
+    #[test_case(99, None, ""; "offset_past_the_end_reads_nothing")]
+    fn read_line_window(offset: i64, limit: Option<u64>, expected: &str) {
         let tmp = TempDir::new().unwrap();
         let file = tmp.path().join("log.txt");
         std::fs::write(&file, WINDOW_LOG_CONTENT).unwrap();
@@ -1295,14 +1381,144 @@ mod tests {
 
         let opts = lua.create_table().unwrap();
         opts.set("offset", offset).unwrap();
-        if let Some(len) = len {
-            opts.set("len", len).unwrap();
+        if let Some(limit) = limit {
+            opts.set("limit", limit).unwrap();
         }
 
         let (text, err): (String, mlua::Value) =
             smol::block_on(read.call_async((file.to_str().unwrap(), opts))).unwrap();
         assert!(matches!(err, mlua::Value::Nil), "windowed read succeeds");
         assert_eq!(text, expected);
+    }
+
+    #[test]
+    fn read_line_window_without_offset_reads_from_the_first_line() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("log.txt");
+        std::fs::write(&file, WINDOW_LOG_CONTENT).unwrap();
+
+        let lua = Lua::new();
+        let tbl =
+            create_fs_table(&lua, &PluginPermissions::trusted(), Arc::from(TEST_PLUGIN)).unwrap();
+        let read: mlua::Function = tbl.get("read").unwrap();
+
+        let opts = lua.create_table().unwrap();
+        opts.set("limit", 1).unwrap();
+
+        let (text, err): (String, mlua::Value) =
+            smol::block_on(read.call_async((file.to_str().unwrap(), opts))).unwrap();
+        assert!(matches!(err, mlua::Value::Nil), "windowed read succeeds");
+        assert_eq!(text, "alpha\n");
+    }
+
+    #[test]
+    fn read_line_window_over_non_utf8_returns_err() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("log.txt");
+        std::fs::write(&file, b"alpha\n\xff\n").unwrap();
+
+        let lua = Lua::new();
+        let tbl =
+            create_fs_table(&lua, &PluginPermissions::trusted(), Arc::from(TEST_PLUGIN)).unwrap();
+        let read: mlua::Function = tbl.get("read").unwrap();
+
+        let opts = lua.create_table().unwrap();
+        opts.set("offset", 2).unwrap();
+
+        let (text, err): (Option<String>, Option<String>) =
+            smol::block_on(read.call_async((file.to_str().unwrap(), opts))).unwrap();
+        assert_eq!(text, None);
+        assert_eq!(err.as_deref(), Some(NON_UTF8_CONTENT_ERR));
+    }
+
+    const TAIL_LOG: &str = "line1\nline2\nline3\nline4\n";
+    const TAIL_LOG_UNTERMINATED: &str = "line1\nline2\nline3\nline4";
+    const SMALL_TAIL_CHUNK: usize = 4;
+    const LINE_SIZED_TAIL_CHUNK: usize = 6;
+
+    #[test_case(TAIL_LOG, -2, None, SMALL_TAIL_CHUNK, "line3\nline4\n"; "across_chunks_with_trailing_newline")]
+    #[test_case(TAIL_LOG_UNTERMINATED, -2, None, SMALL_TAIL_CHUNK, "line3\nline4"; "across_chunks_without_trailing_newline")]
+    #[test_case(TAIL_LOG, -3, None, LINE_SIZED_TAIL_CHUNK, "line2\nline3\nline4\n"; "chunks_ending_on_newlines")]
+    #[test_case(TAIL_LOG, -10, None, SMALL_TAIL_CHUNK, TAIL_LOG; "more_lines_than_exist")]
+    #[test_case(TAIL_LOG_UNTERMINATED, -10, None, SMALL_TAIL_CHUNK, TAIL_LOG_UNTERMINATED; "more_lines_than_exist_unterminated")]
+    #[test_case(TAIL_LOG, -3, Some(1), SMALL_TAIL_CHUNK, "line2\n"; "limit_caps_the_tail")]
+    #[test_case("\n", -1, None, SMALL_TAIL_CHUNK, "\n"; "lone_newline")]
+    #[test_case("", -1, None, SMALL_TAIL_CHUNK, ""; "empty_file")]
+    fn tail_line_window(
+        content: &str,
+        offset: i64,
+        limit: Option<u64>,
+        chunk_size: usize,
+        expected: &str,
+    ) {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("log.txt");
+        std::fs::write(&file, content).unwrap();
+
+        let text = super::read_line_window(&file, offset, limit, chunk_size).unwrap();
+        assert_eq!(text, expected);
+    }
+
+    #[cfg(unix)]
+    const OVERSIZED_TAIL: &str = "\nlast\n";
+    #[cfg(unix)]
+    const OVERSIZED_LAST_LINE: &[u8] = b"last\n";
+
+    // Only the returned window counts toward the read limit, not what it skips.
+    #[cfg(unix)]
+    #[test_case("read", -1; "text_tail")]
+    #[test_case("read_bytes", -(OVERSIZED_LAST_LINE.len() as i64); "byte_tail")]
+    fn tail_of_oversized_file_reads_only_the_window(func_name: &str, offset: i64) {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("oversized.log");
+        let mut file = File::create(&path).unwrap();
+        file.set_len(MAX_READ_BYTES + 1).unwrap();
+        file.seek(SeekFrom::End(0)).unwrap();
+        file.write_all(OVERSIZED_TAIL.as_bytes()).unwrap();
+
+        let lua = Lua::new();
+        let tbl =
+            create_fs_table(&lua, &PluginPermissions::trusted(), Arc::from(TEST_PLUGIN)).unwrap();
+        let f: mlua::Function = tbl.get(func_name).unwrap();
+        let opts = lua.create_table().unwrap();
+        opts.set("offset", offset).unwrap();
+
+        let (value, err): (Value, Option<String>) =
+            smol::block_on(f.call_async((path.to_str().unwrap(), opts))).unwrap();
+        assert_eq!(err, None);
+        let bytes = match value {
+            Value::String(s) => s.as_bytes().to_vec(),
+            Value::Buffer(b) => b.to_vec(),
+            other => panic!("unexpected {other:?}"),
+        };
+        assert_eq!(bytes, OVERSIZED_LAST_LINE);
+    }
+
+    const BYTE_WINDOW_CONTENT: &[u8] = b"0123456789";
+
+    #[test_case(0, None, b"0123456789"; "whole_file")]
+    #[test_case(2, Some(3), b"234"; "offset_and_len_read_a_window")]
+    #[test_case(-3, None, b"789"; "negative_offset_reads_from_end")]
+    fn read_byte_window(offset: i64, len: Option<u64>, expected: &[u8]) {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("blob.bin");
+        std::fs::write(&file, BYTE_WINDOW_CONTENT).unwrap();
+
+        let lua = Lua::new();
+        let tbl =
+            create_fs_table(&lua, &PluginPermissions::trusted(), Arc::from(TEST_PLUGIN)).unwrap();
+        let read_bytes: mlua::Function = tbl.get("read_bytes").unwrap();
+
+        let opts = lua.create_table().unwrap();
+        opts.set("offset", offset).unwrap();
+        if let Some(len) = len {
+            opts.set("len", len).unwrap();
+        }
+
+        let (buffer, err): (Buffer, mlua::Value) =
+            smol::block_on(read_bytes.call_async((file.to_str().unwrap(), opts))).unwrap();
+        assert!(matches!(err, mlua::Value::Nil), "windowed read succeeds");
+        assert_eq!(buffer.to_vec(), expected);
     }
 
     #[test]
