@@ -27,6 +27,7 @@ local RUNNING_COUNT_ICON = "● "
 local DONE_ICON = "✓ "
 local ERROR_ICON = "✗ "
 local IDLE_ICON = "◌ "
+local BACKGROUND_SECTION = "Background"
 local NO_MATCHES_HINT = "  No matches"
 local CONFIRM_HINT = "  Ctrl+D again to delete"
 local MAIN_TASK_ID = "main"
@@ -188,6 +189,29 @@ local function render()
   board.buf:set_lines(lines)
   board.win:set_cursor(cursor_line)
 end
+
+local function background_rows()
+  return Rows.background(board.background, board.input:value(), os.time())
+end
+
+local function add_background(lines, background)
+  if #background == 0 then
+    return
+  end
+  lines[#lines + 1] = { { "  " .. BACKGROUND_SECTION, "keybind_section" } }
+  for _, row in ipairs(background) do
+    local label = "    " .. row.name .. "  " .. row.plugin
+    local pad = math.max(board.width - 3 - dispw(label) - dispw(row.detail), 1)
+    lines[#lines + 1] = { { label, "dim" }, { string.rep(" ", pad) .. row.detail .. " ", "dim" } }
+  end
+end
+
+-- Background sessions send no events, so every tick asks again. That is cheap
+-- because the list lives right here in this Lua VM, with no trip to the host.
+local function load_background()
+  board.background = maki.agent.list({ session = board.session }) or {}
+end
+
 
 -- The one host round-trip. `list()` suspends this coroutine and the picker can
 -- close while it waits, so bail out unless this board is still the current one.
