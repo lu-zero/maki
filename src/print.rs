@@ -12,7 +12,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use clap::ValueEnum;
 use color_eyre::Result;
 use color_eyre::eyre::{Context, eyre};
 use maki_agent::headless::{self, HeadlessHandle, HeadlessParams};
@@ -32,6 +31,7 @@ use maki_storage::id::SessionRef;
 use maki_storage::sessions::SessionClaim;
 use serde::Serialize;
 use serde_json::Value;
+use winnow_args::ValueEnum;
 
 const SESSION_LINE_PREFIX: &str = "session: ";
 

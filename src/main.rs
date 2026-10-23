@@ -10,7 +10,7 @@ mod update;
 
 use std::time::Duration;
 
-use clap::Parser;
+use winnow_args::Args;
 
 use cli::Cli;
 

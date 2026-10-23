@@ -279,11 +279,11 @@ fn parse_id<T: FromStr<Err: Display>>(raw: &str) -> Result<T> {
 mod tests {
     use std::fs;
 
-    use clap::Parser;
     use maki_providers::{Message, TokenUsage};
     use maki_storage::sessions::SESSIONS_DIR;
     use tempfile::{TempDir, tempdir};
     use test_case::test_case;
+    use winnow_args::Args;
 
     use super::*;
 
@@ -362,7 +362,7 @@ mod tests {
                     .map(|a| a.replace(ID_PLACEHOLDER, &stored.to_string())),
             )
             .collect();
-        Cli::parse_from(owned)
+        Cli::parse_from_argv(owned).unwrap()
     }
 
     fn user_texts(resolved: &Resolved) -> Vec<&str> {

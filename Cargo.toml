@@ -24,7 +24,7 @@ maki-providers = { workspace = true }
 maki-storage = { workspace = true }
 maki-lua = { workspace = true }
 maki-otel = { workspace = true }
-clap = { workspace = true }
+winnow-args = { workspace = true }
 color-eyre = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -104,7 +104,7 @@ termini = "1"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "env-filter", "json"] }
-clap = { version = "4", features = ["derive"] }
+winnow-args = { version = "0.5.0" }
 sha2 = { version = "0.11", default-features = false }
 hmac = { version = "0.13", default-features = false }
 base64 = "0.23"

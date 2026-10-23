@@ -576,7 +576,6 @@ pub fn run(mut cli: Cli) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::Parser;
     use color_eyre::eyre::eyre;
     use maki_agent::tools::ToolRegistry;
     use maki_config::RawConfig;
@@ -588,6 +587,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use tempfile::tempdir;
     use test_case::test_case;
+    use winnow_args::Args;
 
     const STARTUP_SPEC: &str = "anthropic/claude-sonnet-4-5";
     const STORED_SPEC: &str = "zai/glm-4.6";
@@ -691,7 +691,7 @@ mod tests {
         )
         .expect("write init.lua");
 
-        let cli = Cli::parse_from(["maki", "--no-plugins"]);
+        let cli = Cli::parse_from_argv(["maki", "--no-plugins"]).unwrap();
         assert!(cli.no_plugins);
 
         let mut plugin_host = PluginHost::new(Arc::new(ToolRegistry::new()))
@@ -732,7 +732,7 @@ mod tests {
         )
         .expect("write init.lua");
 
-        let cli = Cli::parse_from(["maki"]);
+        let cli = Cli::parse_from_argv(["maki"]).unwrap();
         assert!(!cli.no_plugins);
 
         let mut plugin_host =
@@ -773,8 +773,12 @@ mod tests {
                 &storage,
             )
             .expect("write session to disk");
-        let resolved = resume::resolve(&Cli::parse_from(["maki", "-c"]), &cwd, &storage)
-            .expect("continue resolves");
+        let resolved = resume::resolve(
+            &Cli::parse_from_argv(["maki", "-c"]).unwrap(),
+            &cwd,
+            &storage,
+        )
+        .expect("continue resolves");
 
         let session = open_tab(resolved, STARTUP_SPEC, explicit_model, &cwd).session;
 

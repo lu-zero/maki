@@ -1,14 +1,14 @@
 use std::path::PathBuf;
 
-use clap::{ArgGroup, Parser, Subcommand, ValueEnum};
 use color_eyre::Result;
 use color_eyre::eyre::bail;
+use winnow_args::{Args, Subcommand, ValueEnum};
 
 use maki_agent::tools::{all_builtin_tool_names, is_builtin_tool};
 
 use crate::print::OutputFormat;
 
-#[derive(Clone, ValueEnum, Default)]
+#[derive(Clone, Default, ValueEnum)]
 pub enum PromptVariant {
     #[default]
     System,
@@ -16,21 +16,25 @@ pub enum PromptVariant {
     General,
 }
 
-#[derive(Clone, ValueEnum, Default)]
+#[derive(Clone, Default, ValueEnum)]
 pub enum InputFormat {
     #[default]
     Text,
     StreamJson,
 }
 
-#[derive(Parser)]
-#[command(name = "maki", version, about = "AI coding agent for the terminal")]
 // Only one way to name the session to load, or the resolver would quietly pick
 // one. `--fork-session` requires it, since forking nothing used to start a
 // blank session.
-#[command(group = ArgGroup::new("loaded").args(["continue_session", "resume"]))]
+#[derive(Args)]
+#[arg(
+    name = "maki",
+    version,
+    about = "AI coding agent for the terminal",
+    group("loaded")
+)]
 pub struct Cli {
-    #[command(subcommand)]
+    #[arg(subcommand)]
     pub command: Option<Command>,
 
     /// Non-interactive mode. Runs the prompt and exits. Compatible with Claude Code's --print flag
@@ -50,24 +54,25 @@ pub struct Cli {
     pub verbose: bool,
 
     /// Resume the most recent session in this directory
-    #[arg(short = 'c', long = "continue")]
+    #[arg(short = 'c', long = "continue", group = "loaded")]
     pub continue_session: bool,
 
     /// Resume a specific session by its ID
     #[arg(
         short = 'r',
+        short = 's',
         long,
-        visible_short_alias = 's',
-        visible_alias = "session"
+        visible_alias = "session",
+        group = "loaded"
     )]
     pub resume: Option<String>,
 
     /// Output format for --print mode
-    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    #[arg(long, default = "text")]
     pub output_format: OutputFormat,
 
     /// Input format (text or stream-json for SDK mode)
-    #[arg(long, value_enum, default_value_t = InputFormat::Text)]
+    #[arg(long, default = "text")]
     pub input_format: InputFormat,
 
     /// Skip loading custom commands from .maki/commands, .claude/commands, etc.
@@ -101,11 +106,11 @@ pub struct Cli {
     pub exit_on_done: bool,
 
     /// Pre-approve tools (comma-separated). Accepts PascalCase (Claude Code) or snake_case.
-    #[arg(long, value_delimiter = ',', visible_alias = "allowedTools")]
+    #[arg(long, delimiter = ',', visible_alias = "allowedTools")]
     pub allowed_tools: Vec<String>,
 
     /// Disallowed tools (comma-separated).
-    #[arg(long, value_delimiter = ',', visible_alias = "disallowedTools")]
+    #[arg(long, delimiter = ',', visible_alias = "disallowedTools")]
     pub disallowed_tools: Vec<String>,
 
     /// Write this run under a chosen session ID, unless one already exists there
@@ -113,7 +118,13 @@ pub struct Cli {
     pub session_id: Option<String>,
 
     /// Fork the loaded session under a new ID
-    #[arg(long, requires = "loaded")]
+    #[arg(
+        long,
+        requires(
+            "loaded",
+            message = "`--fork-session` requires `--continue` or `--resume`"
+        )
+    )]
     pub fork_session: bool,
 
     /// Maximum number of agent turns
@@ -137,43 +148,43 @@ pub struct Cli {
     pub include_partial_messages: bool,
 
     /// Permission prompt tool (accepted for compat, used in SDK mode)
-    #[arg(long, hide = true)]
+    #[arg(long, hide)]
     pub permission_prompt_tool: Option<String>,
 
     // Accepted but ignored, so Claude Code SDK callers don't break.
-    #[arg(long, hide = true)]
+    #[arg(long, hide)]
     pub fallback_model: Option<String>,
-    #[arg(long, hide = true)]
+    #[arg(long, hide)]
     pub settings: Option<String>,
-    #[arg(long, hide = true)]
+    #[arg(long, hide)]
     pub setting_sources: Option<String>,
-    #[arg(long, hide = true)]
+    #[arg(long, hide)]
     pub add_dir: Option<String>,
-    #[arg(long, hide = true)]
+    #[arg(long, hide)]
     pub strict_mcp_config: bool,
-    #[arg(long, hide = true)]
+    #[arg(long, hide)]
     pub include_hook_events: bool,
-    #[arg(long, hide = true)]
+    #[arg(long, hide)]
     pub mcp_config: Option<String>,
-    #[arg(long, hide = true)]
+    #[arg(long, hide)]
     pub tools: Option<String>,
-    #[arg(long, hide = true)]
+    #[arg(long, hide)]
     pub betas: Option<String>,
-    #[arg(long, hide = true)]
+    #[arg(long, hide)]
     pub max_thinking_tokens: Option<String>,
-    #[arg(long, hide = true)]
+    #[arg(long, hide)]
     pub effort: Option<String>,
-    #[arg(long, hide = true)]
+    #[arg(long, hide)]
     pub json_schema: Option<String>,
-    #[arg(long, hide = true)]
+    #[arg(long, hide)]
     pub max_budget_usd: Option<String>,
-    #[arg(long, hide = true)]
+    #[arg(long, hide)]
     pub thinking: Option<String>,
-    #[arg(long, hide = true)]
+    #[arg(long, hide)]
     pub thinking_display: Option<String>,
 
     /// Initial prompt (reads stdin if piped)
-    #[arg(value_name = "PROMPT")]
+    #[arg(positional, value_name = "PROMPT")]
     pub initial_prompt: Option<String>,
 }
 
@@ -212,7 +223,7 @@ impl Cli {
 pub enum Command {
     /// Manage API authentication
     Auth {
-        #[command(subcommand)]
+        #[arg(subcommand)]
         action: AuthAction,
     },
     /// List all available models
@@ -223,14 +234,17 @@ pub enum Command {
     },
     /// Manage sessions
     Session {
-        #[command(subcommand)]
+        #[arg(subcommand)]
         action: SessionAction,
     },
     /// Run the index tool on a file to see how it looks like
-    Index { path: String },
+    Index {
+        #[arg(positional)]
+        path: String,
+    },
     /// Manage MCP server authentication
     Mcp {
-        #[command(subcommand)]
+        #[arg(subcommand)]
         action: McpAction,
     },
     /// Update maki to the latest version
@@ -256,7 +270,7 @@ pub enum Command {
     /// Show the rendered system prompt or tool definitions
     Prompt {
         /// Prompt variant: system (default), research, general
-        #[arg(value_enum, default_value_t = PromptVariant::System)]
+        #[arg(positional, default = "system")]
         variant: PromptVariant,
         /// Append the plan mode reminder to the system prompt
         #[arg(long)]
@@ -270,12 +284,12 @@ pub enum Command {
     },
     /// Data migration utilities
     Migrate {
-        #[command(subcommand)]
+        #[arg(subcommand)]
         action: MigrateAction,
     },
     /// Manage projects that may load automatic shared project configuration
     Trust {
-        #[command(subcommand)]
+        #[arg(subcommand)]
         action: TrustAction,
     },
 }
@@ -285,6 +299,7 @@ pub enum TrustAction {
     /// Trust a project to load automatic shared .maki configuration
     Add {
         /// Project to trust. Defaults to the current directory
+        #[arg(positional)]
         path: Option<PathBuf>,
         /// Skip the confirmation prompt
         #[arg(long)]
@@ -293,6 +308,7 @@ pub enum TrustAction {
     /// Remove a stored project trust decision
     Remove {
         /// Project to remove. Defaults to the current directory
+        #[arg(positional)]
         path: Option<PathBuf>,
     },
     /// List stored project trust decisions
@@ -313,7 +329,7 @@ pub enum SessionAction {
     /// Delete a session
     Delete {
         /// Session ID (see `maki session list`)
-        #[arg(value_name = "SESSION_ID")]
+        #[arg(positional, value_name = "SESSION_ID")]
         session_id: String,
         /// Skip the confirmation prompt
         #[arg(short, long)]
@@ -346,11 +362,13 @@ pub enum McpAction {
     /// Authenticate with an MCP server
     Auth {
         /// Server name from config
+        #[arg(positional)]
         server: String,
     },
     /// Remove stored OAuth credentials for an MCP server
     Logout {
         /// Server name from config
+        #[arg(positional)]
         server: String,
     },
 }
@@ -360,11 +378,13 @@ pub enum AuthAction {
     /// Authenticate with a provider (interactive if no provider specified)
     Login {
         /// Provider slug (e.g. zai, openai, xai). Omit for interactive selection.
+        #[arg(positional)]
         provider: Option<String>,
     },
     /// Remove stored credentials for a provider
     Logout {
         /// Provider slug (e.g. openai, xai)
+        #[arg(positional)]
         provider: String,
     },
     /// Show authentication status for all providers
@@ -397,8 +417,11 @@ pub fn normalize_tool_name(name: &str) -> Result<String> {
 mod tests {
     use super::*;
     use test_case::test_case;
+    use winnow_args::Args;
 
     const SESSION_ID: &str = "01965087-4c71-7f00-8000-000000000000";
+    // The flag's `message` repeats this. The attribute takes a literal.
+    const FORK_NEEDS_SESSION: &str = "`--fork-session` requires `--continue` or `--resume`";
 
     #[test_case("Read", "read")]
     #[test_case("Bash", "bash")]
@@ -432,6 +455,103 @@ mod tests {
     fn session_flag_combinations(args: &[&str], accepted: bool) {
         let argv = std::iter::once("maki").chain(args.iter().copied());
 
-        assert_eq!(Cli::try_parse_from(argv).is_ok(), accepted);
+        assert_eq!(Cli::parse_from_argv(argv).is_ok(), accepted);
+    }
+
+    #[test]
+    fn fork_without_a_session_says_why() {
+        let Err(error) = Cli::parse_from(["--fork-session"]) else {
+            panic!("fork with nothing to fork was accepted");
+        };
+        assert_eq!(error.kind(), winnow_args::ErrorKind::MissingOneOf);
+        assert_eq!(error.to_string(), FORK_NEEDS_SESSION);
+    }
+
+    #[test]
+    fn visible_aliases_are_listed() {
+        let Err(error) = Cli::parse_from(["-h"]) else {
+            panic!("help was a successful parse");
+        };
+        let text = error.render_help("maki").expect("help text");
+        assert!(text.contains("-r, -s, --resume, --session"), "{text}");
+        assert!(text.contains("--allowed-tools, --allowedTools"), "{text}");
+        assert!(
+            text.contains("--disallowed-tools, --disallowedTools"),
+            "{text}"
+        );
+        assert!(!text.contains("dangerously-skip-permissions"), "{text}");
+    }
+
+    #[test]
+    fn compat_spellings_prompt_and_subcommand() {
+        let yolo = Cli::parse_from(["--dangerously-skip-permissions"]).unwrap();
+        assert!(yolo.yolo);
+
+        let tools = Cli::parse_from([
+            "--allowedTools",
+            "read,bash",
+            "--disallowedTools",
+            "web_search",
+        ])
+        .unwrap();
+        assert_eq!(tools.allowed_tools, ["read", "bash"]);
+        assert_eq!(tools.disallowed_tools, ["web_search"]);
+
+        let resumed = Cli::parse_from(["--session", SESSION_ID]).unwrap();
+        assert_eq!(resumed.resume.as_deref(), Some(SESSION_ID));
+
+        let prompt = Cli::parse_from(["fix the parser"]).unwrap();
+        assert_eq!(prompt.initial_prompt.as_deref(), Some("fix the parser"));
+        assert!(prompt.command.is_none());
+
+        let auth = Cli::parse_from(["auth", "status"]).unwrap();
+        assert!(matches!(
+            auth.command,
+            Some(Command::Auth {
+                action: AuthAction::Status
+            })
+        ));
+
+        let format = Cli::parse_from([
+            "--print",
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "json",
+        ])
+        .unwrap();
+        assert!(matches!(format.input_format, InputFormat::StreamJson));
+        assert!(matches!(format.output_format, OutputFormat::Json));
+        assert!(format.is_sdk_mode());
+
+        assert!(Cli::parse_from(["--no-plugins", "session", "list"]).is_ok());
+        assert!(Cli::parse_from(["session", "list", "--no-plugins"]).is_err());
+    }
+
+    #[test]
+    fn prompt_names_need_tools_and_the_variant_defaults() {
+        let bare = Cli::parse_from(["prompt"]).unwrap();
+        assert!(matches!(
+            bare.command,
+            Some(Command::Prompt {
+                variant: PromptVariant::System,
+                plan: false,
+                tools: false,
+                names: false,
+            })
+        ));
+
+        assert!(Cli::parse_from(["prompt", "--names"]).is_err());
+
+        let named = Cli::parse_from(["prompt", "research", "--tools", "--names"]).unwrap();
+        assert!(matches!(
+            named.command,
+            Some(Command::Prompt {
+                variant: PromptVariant::Research,
+                tools: true,
+                names: true,
+                ..
+            })
+        ));
     }
 }

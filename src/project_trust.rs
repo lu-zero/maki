@@ -91,8 +91,8 @@ fn resolve_argument(path: Option<&Path>) -> Result<PathBuf> {
 mod tests {
     use std::fs;
 
-    use clap::Parser;
     use test_case::test_case;
+    use winnow_args::Args;
 
     use super::*;
     use crate::cli::{Cli, Command, TrustAction};
@@ -105,7 +105,8 @@ mod tests {
     #[test_case(&["trust", "add", "--yes", "/tmp"] ; "yes_before_path")]
     #[test_case(&["trust", "add", "/tmp", "--yes"] ; "yes_after_path")]
     fn trust_add_accepts_the_flag_on_either_side_of_the_path(args: &[&str]) {
-        let cli = Cli::try_parse_from(std::iter::once("maki").chain(args.iter().copied())).unwrap();
+        let cli =
+            Cli::parse_from_argv(std::iter::once("maki").chain(args.iter().copied())).unwrap();
 
         assert!(matches!(
             cli.command,
