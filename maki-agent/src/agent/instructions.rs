@@ -84,9 +84,9 @@ pub struct Instructions {
     pub files: Arc<Vec<String>>,
 }
 
-pub fn is_instruction_file(name: &str) -> bool {
+pub fn is_instruction_file(name: &str, files: &[String]) -> bool {
     name == LOCAL_INSTRUCTION_FILE
-        || INSTRUCTION_FILES
+        || files
             .iter()
             .any(|f| *f == name || Path::new(f).file_name().is_some_and(|n| n == name))
 }
@@ -339,7 +339,10 @@ mod tests {
     #[test_case("random.md",                false ; "unrelated_file")]
     #[test_case("not-AGENTS.md",            false ; "partial_match")]
     fn is_instruction_file_cases(name: &str, expected: bool) {
-        assert_eq!(is_instruction_file(name), expected);
+        assert_eq!(
+            is_instruction_file(name, &default_instruction_files()),
+            expected
+        );
     }
 
     #[test]

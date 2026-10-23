@@ -357,6 +357,8 @@ impl AgentLoop {
         let cwd = self.vars.apply("{cwd}").into_owned();
         let config = self.seed.config.instructions.clone();
         self.instructions = smol::unblock(move || agent::load_instructions(&cwd, &config)).await;
+        self.seed
+            .set_instruction_files(self.instructions.files.clone());
     }
 
     fn emit_error(&self, run_id: u64, error: AgentError) {

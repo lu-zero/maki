@@ -376,8 +376,14 @@ impl UserData for LuaCtx {
             },
         );
 
-        methods.add_method("is_instruction_file", |_, _, name: String| {
-            Ok(maki_agent::is_instruction_file(&name))
+        methods.add_method("is_instruction_file", |_, this, name: String| {
+            let Some(agent) = this.agent() else {
+                return Ok(this.cap_err_pair("is_instruction_file"));
+            };
+            Ok((
+                Some(maki_agent::is_instruction_file(&name, &agent.instruction_files)),
+                None,
+            ))
         });
 
         methods.add_method_mut("finish", |lua, this, val: LuaValue| {

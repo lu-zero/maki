@@ -66,6 +66,10 @@ pub struct AgentSeed {
     /// and not the mode on purpose. Handed to a background run, the mode would
     /// bring the plan prompt along, plus a free pass to write the plan file.
     chat_settings: Mutex<(RequestOptions, bool)>,
+    /// The session's resolved instruction file list, set once the loop has
+    /// loaded it. A plugin subagent builds its context from this, so its reads
+    /// resolve the same list the chat does.
+    instruction_files: Mutex<Arc<Vec<String>>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -179,6 +183,7 @@ impl AgentSeed {
             file_access: FileAccess::fresh(),
             model_policy,
             chat_settings: Mutex::default(),
+            instruction_files: Mutex::new(Arc::new(Vec::new())),
         }
     }
 
@@ -191,6 +196,10 @@ impl AgentSeed {
 
     pub fn set_chat_settings(&self, opts: RequestOptions, mode: &AgentMode) {
         *lock(&self.chat_settings) = (opts, mode.plan_path().is_some());
+    }
+
+    pub fn set_instruction_files(&self, files: Arc<Vec<String>>) {
+        *lock(&self.instruction_files) = files;
     }
 
     pub fn chat_opts(&self) -> RequestOptions {
@@ -228,6 +237,7 @@ impl AgentSeed {
             timeouts: self.timeouts,
             opts: self.chat_opts(),
             model_policy: Arc::clone(&self.model_policy),
+            instruction_files: lock(&self.instruction_files).clone(),
             ..interpreter_ctx(
                 &AgentMode::Build,
                 &EventSender::new(sink, UNATTENDED_RUN_ID),
