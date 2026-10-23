@@ -125,7 +125,6 @@ local function render()
       add_background(lines, background)
       background = nil
     end
-    end
     local selected = Rows.row_id(row) == board.sel_id
     local base = selected and "selected" or "item"
     local icon, icon_style, spinning
@@ -172,8 +171,6 @@ local function render()
       line[#line + 1] = { tag, selected and "selected" or "dim" }
       line[#line + 1] = { "  ", base }
     elseif trail > 0 then
-      line[#line + 1] = { string.rep(" ", trail), base }
-    end
       line[#line + 1] = { string.rep(" ", trail), base }
     end
     if owner ~= "" then
