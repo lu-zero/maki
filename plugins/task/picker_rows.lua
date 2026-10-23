@@ -1,9 +1,4 @@
 -- Row building for the /tasks picker in picker.lua: filtering, ordering and
-<<<<<<< HEAD
--- sections, with no host calls and no globals. Every refresh throws the old
--- rows away and builds them again, so nothing here can drift from the host
--- list.
-=======
 -- nesting, with no host calls and no globals. Every refresh throws the old
 -- rows away and builds them again, so nothing here can drift from the host
 -- list.
@@ -15,7 +10,6 @@
 -- carries spawned_by (the task id of the subagent that started it, nil for
 -- the main chat), which is what decides where it nests. `collapsed` maps task
 -- ids with hidden jobs.
->>>>>>> 8565352f (feat(task): the /tasks picker is one collapsible tree)
 
 local ListPicker = require("maki.list_picker")
 
@@ -27,23 +21,11 @@ local ELAPSED_UNITS = { { 3600, "h" }, { 60, "m" } }
 local UNDER_A_MINUTE = "<1m"
 local M = {}
 
-<<<<<<< HEAD
 -- An idle plugin task is waiting for its next prompt, not finished.
 local function alive(status)
   return status == "working" or status == "idle"
 end
 
--- The main chat comes first and has no status. The subagents follow, live
--- ones above finished ones so a long job never gets buried under the ones
--- that already returned. The Jobs section sits between: the session's command
--- jobs from any plugin, running ones first. Within a task section, newest
--- first (`tasks` comes in chat order, which is spawn order), so the latest
--- task is the one at hand. Jobs stay in list order.
---
--- Returns { rows, sections }. A row carries a section header only when it opens
--- one, and `sections` counts what survived the filter.
-function M.build(tasks, jobs, query)
-=======
 local function bucket_count(live, exited, key)
   return #(live[key] or {}) + #(exited[key] or {})
 end
@@ -62,7 +44,6 @@ end
 -- children are hidden; job rows carry `depth` only.
 function M.build(tasks, jobs, query, collapsed)
   collapsed = collapsed or {}
->>>>>>> 8565352f (feat(task): the /tasks picker is one collapsible tree)
   local words = ListPicker.split_words(query)
   local main, running, finished = nil, {}, {}
   local task_by_id = {}

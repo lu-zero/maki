@@ -20,6 +20,7 @@ use maki_agent::{
 };
 use maki_config::{ToolKey, ToolOutputLines, UiConfig};
 use maki_lua::{LuaCommandInfo, WinView};
+
 use maki_providers::{ContentBlock, ImageSource, Message, RequestOptions, Role};
 use maki_storage::id::MakiId;
 use ratatui::Frame;

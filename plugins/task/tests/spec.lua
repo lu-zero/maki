@@ -140,9 +140,10 @@ case("only_finished_subagents_are_deletable", function()
 end)
 
 case("an_idle_plugin_task_sorts_with_the_running_ones", function()
-  local built = Rows.build({ MAIN, BUILD, MONITOR }, "")
+  local built = Rows.build({ MAIN, BUILD, MONITOR }, {}, "")
   eq(ids(built.rows), "main,session-01,toolu_02")
-  eq(sections(built.rows), "2:Running,3:Finished")
+  eq(built.sections.running, 1)
+  eq(built.sections.finished, 1)
 end)
 
 local TESTS = { id = 1, name = "just test", status = "running", exit_code = nil }
