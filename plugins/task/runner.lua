@@ -82,7 +82,7 @@ end
 if opts.allow_background then
   schema.properties.background = {
     type = "boolean",
-    description = "Run in the background and continue other work. The result arrives later in a notice. End your turn to wait for it. Background tasks cannot ask for permissions.",
+    description = "Run in the background and continue other work: the call returns at once and the result arrives later as a notice that wakes you. Launch every background task in one parallel batch, never as sequential calls, and don't sleep or poll for it; end your turn once nothing else is left. Background tasks cannot ask for permissions.",
   }
 end
 

@@ -103,7 +103,9 @@ function Background.start(prepared, ctx)
     work(entry, prepared)
   end)
   return {
-    llm_output = "Background task started: " .. entry.name .. ". The result will be delivered when it finishes.",
+    llm_output = "Background task started: "
+      .. entry.name
+      .. ". The result is delivered as a notice when it finishes. Don't wait or poll for it; end your turn once you have nothing else to do.",
   }
 end
 
