@@ -49,10 +49,6 @@ pub trait PickerItem {
     fn is_highlighted(&self) -> bool {
         false
     }
-    /// Drawn greyed out: present and searchable, but not usable as-is.
-    fn is_dimmed(&self) -> bool {
-        false
-    }
     /// Left out of the list until the search reaches for it: a model inside
     /// a provider group the user folded.
     fn is_hidden(&self) -> bool {
@@ -762,7 +758,6 @@ fn render_list<T: PickerItem>(
         }
 
         let highlighted = item.is_highlighted();
-        let dimmed = item.is_dimmed();
         let t = theme::current();
         let (style, detail_style) = match (i == selected, highlighted) {
             (true, true) => {
@@ -773,10 +768,6 @@ fn render_list<T: PickerItem>(
             (false, true) => (t.accent, theme::dim_style(t.accent, 0.4)),
             (false, false) if item.is_section_row() => {
                 (t.keybind_section, theme::dim_style(t.keybind_section, 0.4))
-            }
-            (false, false) if dimmed => {
-                let s = theme::dim_style(t.item, 0.5);
-                (s, theme::dim_style(s, 0.4))
             }
             (false, false) => (t.item, t.item_desc),
         };

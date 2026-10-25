@@ -219,20 +219,6 @@ impl LoginPicker {
         self.step = Step::PickProvider(picker);
     }
 
-    /// Opens the wizard already advanced into `slug`'s flow, so a model
-    /// picker row for a provider without a key lands straight on its key
-    /// prompt. The provider row stays selected, so `Back` from there returns
-    /// to the list pointing at it.
-    pub fn open_for(&mut self, storage: maki_storage::StateDir, slug: &str) {
-        self.open(storage);
-        let Some(item) = self.provider_items.iter().find(|i| i.slug == slug).cloned() else {
-            return;
-        };
-        if let Step::PickProvider(picker) = &mut self.step {
-            picker.select_item_by(|i| i.slug == slug);
-        }
-        self.transition(choose_provider(&item));
-    }
 
     pub fn handle_paste(&mut self, text: &str) -> bool {
         match &mut self.step {

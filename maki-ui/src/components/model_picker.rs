@@ -28,7 +28,6 @@ const TIER_COL: usize = 10;
 const PRICE_COL: usize = 15;
 const PRICE_WIDTH: usize = 7;
 const LOADING_NOTICE: &str = "loading models...";
-const NO_KEY_LABEL: &str = "no key";
 const OFFLINE_LABEL: &str = "offline";
 const FALLBACK_LABEL: &str = "fallback";
 const EMPTY_LABEL: &str = "no models";
@@ -42,11 +41,9 @@ const FOOTER: &[(&str, &str)] = &[
     ("$", "compaction"),
     ("%", "fold"),
     ("*", "fold all"),
-    ("&", "no-key"),
 ];
 const FOLD_KEY: KeyCode = KeyCode::Char('%');
 const FOLD_ALL_KEY: KeyCode = KeyCode::Char('*');
-const NO_KEY_KEY: KeyCode = KeyCode::Char('&');
 
 fn tier_for_shortcut(key: KeyEvent) -> Option<ModelTier> {
     // Shift+digit arrives as the character it types, with the SHIFT bit
@@ -75,9 +72,6 @@ pub enum ModelPickerAction {
     /// `(slug, folded)`. The picker has no state dir, so the caller saves the
     /// new set.
     Collapse(String, bool),
-    /// A provider without usable credentials; the caller opens its login
-    /// flow.
-    Login(String),
     Close,
 }
 
@@ -93,7 +87,6 @@ struct ModelEntry {
     override_tiers: Vec<ModelTier>,
     free: bool,
     is_provider: bool,
-    usable: bool,
     spinning: bool,
     hidden: bool,
     /// The model in use; marked on whichever row lists it.
@@ -119,10 +112,6 @@ impl PickerItem for ModelEntry {
 
     fn is_highlighted(&self) -> bool {
         !self.override_tiers.is_empty()
-    }
-
-    fn is_dimmed(&self) -> bool {
-        self.is_provider && !self.usable
     }
 
     fn is_spinning(&self) -> bool {
@@ -153,9 +142,6 @@ pub struct ModelPicker {
     /// The provider universe as of the last `open`, so rows exist for
     /// providers discovery has nothing to say about.
     providers: Vec<ProviderEntry>,
-    /// Providers without credentials are noise until the user is looking
-    /// for one to log into, so they stay hidden behind `&`.
-    show_no_key: bool,
 }
 
 impl ModelPicker {
@@ -170,7 +156,6 @@ impl ModelPicker {
             anchor: None,
             expanded: BTreeSet::new(),
             providers: Vec::new(),
-            show_no_key: false,
         }
     }
 
@@ -267,12 +252,11 @@ impl ModelPicker {
 
         // One row per provider: the universe supplies auth state and covers
         // providers discovery says nothing about; a slug only discovery knows
-        // (plugin-owned) still gets its row. Providers without credentials
-        // only list once `&` asked for them.
+        // (plugin-owned) still gets its row.
         let mut rows: Vec<(String, String)> = self
             .providers
             .iter()
-            .filter(|p| self.show_no_key || p.usable())
+            .filter(|p| p.usable())
             .map(|p| (p.slug.clone(), p.display_name.clone()))
             .collect();
         for slug in groups.keys() {
@@ -319,14 +303,7 @@ impl ModelPicker {
             .available
             .get()
             .and_then(|l| l.providers.get(slug));
-        let usable = self
-            .providers
-            .iter()
-            .find(|p| p.slug == slug)
-            .is_none_or(ProviderEntry::usable);
-        let (suffix, spinning) = if !usable {
-            (Some(NO_KEY_LABEL), false)
-        } else if answered.is_none() && loading {
+        let (suffix, spinning) = if answered.is_none() && loading {
             (None, true)
         } else if answered.is_none() {
             (Some(OFFLINE_LABEL), false)
@@ -349,7 +326,6 @@ impl ModelPicker {
             override_tiers: Vec::new(),
             free: false,
             is_provider: true,
-            usable,
             spinning,
             hidden: false,
             current: false,
@@ -425,7 +401,6 @@ impl ModelPicker {
         let visible_slugs = || {
             self.providers
                 .iter()
-                .filter(|p| self.show_no_key || p.usable())
                 .map(|p| p.slug.clone())
                 .chain(spec_slugs())
         };
@@ -441,11 +416,6 @@ impl ModelPicker {
     }
 
     fn handle_key_inner(&mut self, key: KeyEvent) -> ModelPickerAction {
-        if key.code == NO_KEY_KEY {
-            self.show_no_key = !self.show_no_key;
-            self.needs_rebuild = true;
-            return ModelPickerAction::Consumed;
-        }
         if key.code == FOLD_ALL_KEY {
             return self.fold_all();
         }
@@ -457,11 +427,6 @@ impl ModelPicker {
             let Some(entry) = self.picker.selected_item() else {
                 return ModelPickerAction::Consumed;
             };
-            // Nothing to fold open for a provider without credentials; the
-            // login flow is what this row has to offer.
-            if on_provider_row && !entry.usable {
-                return ModelPickerAction::Login(entry.provider.clone());
-            }
             let slug = entry.provider.clone();
             // A model row only shows in an open group, so its key folds;
             // the provider row toggles.
@@ -590,7 +555,6 @@ fn parse_model_entry(spec: &str) -> Option<ModelEntry> {
         override_tiers,
         free,
         is_provider: false,
-        usable: true,
         spinning: false,
         hidden: false,
         current: false,
@@ -603,8 +567,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use crate::components::keybindings::key as kb;
-    use crate::components::provider_auth::Auth as TestAuth;
-    use crate::components::{buffer_text, key};
+        use crate::components::{buffer_text, key};
     use crossterm::event::{KeyCode, KeyEvent};
     use maki_providers::ModelInfo;
     use maki_providers::ModelPricing;
@@ -918,112 +881,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn reopen_preselects_the_current_model_on_its_recent_row() {
-        let models = test_models();
-        let mut p = ModelPicker::new(models);
-        p.set_recents(vec![
-            "zai/glm-5".into(),
-            "anthropic/claude-sonnet-4-20250514".into(),
-        ]);
-        p.open("zai/glm-5", &[]);
-
-        let entry = p.picker.selected_item().expect("selection on reopen");
-        assert_eq!(entry.spec, "zai/glm-5");
-        assert_eq!(
-            entry.section(),
-            Some("Recent"),
-            "the group is folded, so the Recent copy is where the pick lands"
-        );
-        assert!(entry.current, "and it carries the highlight");
-    }
-
-
-    fn provider_entry_of(slug: &str, display: &str, usable: bool) -> ProviderEntry {
-        ProviderEntry {
-            slug: slug.to_string(),
-            display_name: display.to_string(),
-            auth: if usable {
-                TestAuth::Saved
-            } else {
-                TestAuth::Missing
-            },
-            configured: false,
-            from_catalog: false,
-        }
-    }
-
-    /// Providers without credentials stay out of the list until `&` asks
-    /// for them; revealed, they are greyed out and Enter hands back the
-    /// slug for the login flow instead of a model.
-    #[test]
-    fn no_key_providers_stay_hidden_until_asked_then_answer_enter_with_login() {
-        let models = Arc::new(ArcSwapOption::empty());
-        models.store(Some(loaded(vec!["zai/glm-5".into()])));
-        let mut p = ModelPicker::new(models);
-        p.open(
-            "",
-            &[provider_entry_of("openrouter", "OpenRouter", false)],
-        );
-
-        assert!(
-            !p.load_entries().iter().any(|e| e.provider == "openrouter"),
-            "the default list is the providers that can be used"
-        );
-        let entries = p.load_entries();
-        let zai = entries
-            .iter()
-            .find(|e| e.is_provider && e.provider == "zai")
-            .expect("the usable provider keeps its row");
-        assert!(!zai.is_dimmed(), "usable providers are untouched");
-
-        p.handle_key(key(NO_KEY_KEY));
-        let _ = p.refresh();
-        let entries = p.load_entries();
-        let row = entries
-            .iter()
-            .find(|e| e.is_provider && e.provider == "openrouter")
-            .expect("& reveals the no-key provider");
-        assert_eq!(row.suffix.as_deref(), Some(NO_KEY_LABEL));
-        assert!(row.is_dimmed());
-
-        assert!(p.picker.select_item_by(|e| e.is_provider && e.provider == "openrouter"));
-        let action = p.handle_key(key(KeyCode::Enter));
-        assert!(matches!(action, ModelPickerAction::Login(slug) if slug == "openrouter"));
-        assert!(p.is_open(), "{KEPT_OPEN}");
-    }
-
-    /// The toggle sticks across reopens within the session, and folds only
-    /// ever touch the rows that are visible.
-    #[test]
-    fn no_key_toggle_survives_reopen_and_fold_all_skips_hidden_providers() {
-        let models = Arc::new(ArcSwapOption::empty());
-        models.store(Some(loaded(vec!["zai/glm-5".into()])));
-        let mut p = ModelPicker::new(models);
-        p.open(
-            "",
-            &[
-                provider_entry_of("openrouter", "OpenRouter", false),
-                provider_entry_of("anthropic", "Anthropic", true),
-            ],
-        );
-        p.handle_key(key(NO_KEY_KEY));
-        p.open("", &[provider_entry_of("openrouter", "OpenRouter", false)]);
-        assert!(
-            p.load_entries().iter().any(|e| e.provider == "openrouter"),
-            "the toggle is a picker setting, not a per-open one"
-        );
-
-        // Hidden again, open-everything leaves the unlisted row alone.
-        p.handle_key(key(NO_KEY_KEY));
-        p.handle_key(key(FOLD_ALL_KEY));
-        assert!(
-            !p.expanded_providers().contains("openrouter"),
-            "opening everything must not open rows that are not listed"
-        );
-        assert!(p.expanded_providers().contains("zai"));
-    }
-
     /// The default view already is just the provider rows, so the first
     /// press opens every group and the second closes them all again.
     #[test]
@@ -1082,7 +939,13 @@ mod tests {
         let mut p = ModelPicker::new(models);
         p.open(
             "",
-            &[provider_entry_of("mistral", "Mistral", true)],
+            &[ProviderEntry {
+                slug: "mistral".into(),
+                display_name: "Mistral".into(),
+                auth: crate::components::provider_auth::Auth::Saved,
+                configured: false,
+                from_catalog: false,
+            }],
         );
 
         let entries = p.load_entries();
@@ -1091,7 +954,6 @@ mod tests {
             .find(|e| e.is_provider && e.provider == "mistral")
             .expect("the universe provider keeps a row");
         assert_eq!(row.suffix.as_deref(), Some(OFFLINE_LABEL));
-        assert!(!row.is_dimmed());
     }
 
     #[test]

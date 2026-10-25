@@ -1139,11 +1139,6 @@ impl App {
                     self.flash(format!("{slug}{suffix}"));
                     vec![]
                 }
-                ModelPickerAction::Login(slug) => {
-                    self.model_picker.close();
-                    self.login_picker.open_for(self.storage.clone(), &slug);
-                    vec![]
-                }
                 ModelPickerAction::Close => vec![],
             });
         }
