@@ -28,6 +28,7 @@ const TIER_COL: usize = 10;
 const PRICE_COL: usize = 15;
 const PRICE_WIDTH: usize = 7;
 const LOADING_NOTICE: &str = "loading models...";
+const NO_KEY_LABEL: &str = "no key";
 const OFFLINE_LABEL: &str = "offline";
 const FALLBACK_LABEL: &str = "fallback";
 const EMPTY_LABEL: &str = "no models";
@@ -256,7 +257,7 @@ impl ModelPicker {
         let mut rows: Vec<(String, String)> = self
             .providers
             .iter()
-            .filter(|p| p.usable())
+            .filter(|p| p.usable() || p.from_config)
             .map(|p| (p.slug.clone(), p.display_name.clone()))
             .collect();
         for slug in groups.keys() {
@@ -303,7 +304,16 @@ impl ModelPicker {
             .available
             .get()
             .and_then(|l| l.providers.get(slug));
-        let (suffix, spinning) = if answered.is_none() && loading {
+        // A declared provider without a key can never be probed, so it
+        // reports the one thing the user can act on instead of offline.
+        let missing_key = self
+            .providers
+            .iter()
+            .find(|p| p.slug == slug)
+            .is_some_and(|p| p.auth == crate::components::provider_auth::Auth::Missing);
+        let (suffix, spinning) = if missing_key {
+            (Some(NO_KEY_LABEL), false)
+        } else if answered.is_none() && loading {
             (None, true)
         } else if answered.is_none() {
             (Some(OFFLINE_LABEL), false)
@@ -931,6 +941,39 @@ mod tests {
         assert_eq!(row.detail, "2 models");
     }
 
+    /// A `providers.toml` provider is an explicit opt-in: it lists even
+    /// without a key, and says so instead of spinning or reading offline.
+    #[test]
+    fn a_declared_provider_without_a_key_lists_and_says_no_key() {
+        let models = Arc::new(ArcSwapOption::empty());
+        models.store(Some(Arc::new(ModelList {
+            specs: Vec::new(),
+            loading: true,
+            providers: BTreeMap::new(),
+        })));
+        let mut p = ModelPicker::new(models);
+        p.open(
+            "",
+            &[ProviderEntry {
+                slug: "disconnected".into(),
+                display_name: "Disconnected".into(),
+                auth: crate::components::provider_auth::Auth::Missing,
+                configured: false,
+                from_catalog: false,
+                from_config: true,
+            }],
+        );
+
+        let entries = p.load_entries();
+        let row = entries
+            .iter()
+            .find(|e| e.is_provider && e.provider == "disconnected")
+            .expect("a declared provider always lists");
+        assert_eq!(row.suffix.as_deref(), Some(NO_KEY_LABEL));
+        assert!(!row.spinning, "it cannot be probed, so it never spins");
+        assert_eq!(row.detail, "");
+    }
+
     /// A provider whose probe never landed reads as offline, not as empty.
     #[test]
     fn an_unanswered_probe_marks_its_provider_row_offline() {
@@ -945,6 +988,7 @@ mod tests {
                 auth: crate::components::provider_auth::Auth::Saved,
                 configured: false,
                 from_catalog: false,
+                from_config: false,
             }],
         );
 
