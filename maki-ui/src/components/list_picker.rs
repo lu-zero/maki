@@ -49,6 +49,15 @@ pub trait PickerItem {
     fn is_highlighted(&self) -> bool {
         false
     }
+    /// Drawn greyed out: present and searchable, but not usable as-is.
+    fn is_dimmed(&self) -> bool {
+        false
+    }
+    /// Left out of the list until the search reaches for it: a model inside
+    /// a provider group the user folded.
+    fn is_hidden(&self) -> bool {
+        false
+    }
     /// Drawn in place of its section header, so the cursor can land on the
     /// section itself.
     fn is_section_row(&self) -> bool {
@@ -116,7 +125,9 @@ impl<T: PickerItem> State<T> {
     fn rebuild_filter(&mut self) {
         let query = self.search.value();
         if query.is_empty() {
-            self.filtered = (0..self.items.len()).collect();
+            self.filtered = (0..self.items.len())
+                .filter(|&idx| !self.items[idx].is_hidden())
+                .collect();
         } else {
             let pattern = Pattern::new(
                 &query,
@@ -729,14 +740,18 @@ fn render_list<T: PickerItem>(
         if let Some(sec) = item.section()
             && last_section.is_none_or(|prev| prev != sec)
         {
-            if !lines.is_empty() && lines.len() < viewport_height {
-                lines.push(Line::raw(""));
-            }
-            if !item.is_section_row() && lines.len() < viewport_height {
-                lines.push(Line::from(Span::styled(
-                    format!("  {sec}"),
-                    theme::current().keybind_section,
-                )));
+            // A section row is itself the header, styled to stand out, so it
+            // does not also get the blank line and the header text.
+            if !item.is_section_row() {
+                if !lines.is_empty() && lines.len() < viewport_height {
+                    lines.push(Line::raw(""));
+                }
+                if lines.len() < viewport_height {
+                    lines.push(Line::from(Span::styled(
+                        format!("  {sec}"),
+                        theme::current().keybind_section,
+                    )));
+                }
             }
             last_section = Some(sec);
         }
@@ -746,6 +761,7 @@ fn render_list<T: PickerItem>(
         }
 
         let highlighted = item.is_highlighted();
+        let dimmed = item.is_dimmed();
         let t = theme::current();
         let (style, detail_style) = match (i == selected, highlighted) {
             (true, true) => {
@@ -756,6 +772,10 @@ fn render_list<T: PickerItem>(
             (false, true) => (t.accent, theme::dim_style(t.accent, 0.4)),
             (false, false) if item.is_section_row() => {
                 (t.keybind_section, theme::dim_style(t.keybind_section, 0.4))
+            }
+            (false, false) if dimmed => {
+                let s = theme::dim_style(t.item, 0.5);
+                (s, theme::dim_style(s, 0.4))
             }
             (false, false) => (t.item, t.item_desc),
         };

@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use super::session::{FORK_EMPTY_MSG, FORK_TITLE_PREFIX};
 use super::*;
 use crate::AppSession;
@@ -3032,6 +3034,7 @@ fn model_list_arriving_in_the_background_owes_a_frame() {
         models.store(Some(Arc::new(ModelList {
             specs: vec![LATE_MODEL_SPEC.into()],
             loading: false,
+            providers: BTreeMap::new(),
         })));
     });
 }

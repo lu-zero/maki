@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use arc_swap::ArcSwapOption;
@@ -10,10 +10,11 @@ use maki_providers::Model;
 use maki_providers::ModelTier;
 use maki_providers::model_registry;
 use maki_providers::models_cache::ModelList;
-use maki_providers::spec::{Build, ProviderRegistry};
+use maki_providers::spec::{Build, Owner, ProviderRegistry};
 
 use crate::components::Overlay;
 use crate::components::list_picker::{ListPicker, PickerAction, PickerItem};
+use crate::components::provider_auth::ProviderEntry;
 use crate::repaint::{Cadence, Dirty, Watch};
 
 const TITLE: &str = " Models ";
@@ -23,6 +24,12 @@ const FREE_PREFIX: &str = "Free · ";
 const PRICE_SEPARATOR: &str = " · ";
 const PRICE_WIDTH: usize = 7;
 const LOADING_NOTICE: &str = "loading models...";
+const CUSTOM_MARKER: &str = " (custom)";
+const NO_KEY_LABEL: &str = "no key";
+const OFFLINE_LABEL: &str = "offline";
+const FALLBACK_LABEL: &str = "fallback";
+const EMPTY_LABEL: &str = "no models";
+const ALL_PROVIDERS: &str = "all providers";
 const FOOTER: &[(&str, &str)] = &[
     ("Enter", "select"),
     ("!", "strong"),
@@ -30,8 +37,12 @@ const FOOTER: &[(&str, &str)] = &[
     ("#", "weak"),
     ("$", "compaction"),
     ("%", "fold"),
+    ("*", "fold all"),
+    ("&", "no-key"),
 ];
 const FOLD_KEY: KeyCode = KeyCode::Char('%');
+const FOLD_ALL_KEY: KeyCode = KeyCode::Char('*');
+const NO_KEY_KEY: KeyCode = KeyCode::Char('&');
 
 fn tier_for_shortcut(key: KeyEvent) -> Option<ModelTier> {
     // Shift+digit arrives as the character it types, with the SHIFT bit
@@ -52,24 +63,6 @@ fn tier_for_shortcut(key: KeyEvent) -> Option<ModelTier> {
     }
 }
 
-/// A folded provider shrinks down to this one row. It sits where the section
-/// header was, so the cursor still has something to land on, and it says how
-/// many models are tucked away behind it.
-fn provider_entry(model: &ModelEntry, count: usize) -> ModelEntry {
-    let plural = if count == 1 { "model" } else { "models" };
-    ModelEntry {
-        spec: model.provider.clone(),
-        id: model.provider_display.clone(),
-        provider: model.provider.clone(),
-        provider_display: model.provider_display.clone(),
-        suffix: None,
-        detail: format!("{count} {plural}"),
-        override_tiers: Vec::new(),
-        free: false,
-        is_provider: true,
-    }
-}
-
 pub enum ModelPickerAction {
     Consumed,
     Select(String),
@@ -78,12 +71,16 @@ pub enum ModelPickerAction {
     /// `(slug, folded)`. The picker has no state dir, so the caller saves the
     /// new set.
     Collapse(String, bool),
+    /// A provider without usable credentials; the caller opens its login
+    /// flow.
+    Login(String),
     Close,
 }
 
 struct ModelEntry {
     /// The qualified spec, or the bare slug on a provider row.
     spec: String,
+    label: String,
     id: String,
     provider: String,
     provider_display: String,
@@ -92,11 +89,14 @@ struct ModelEntry {
     override_tiers: Vec<ModelTier>,
     free: bool,
     is_provider: bool,
+    usable: bool,
+    spinning: bool,
+    hidden: bool,
 }
 
 impl PickerItem for ModelEntry {
     fn label(&self) -> &str {
-        &self.id
+        &self.label
     }
 
     fn suffix(&self) -> Option<&str> {
@@ -115,11 +115,22 @@ impl PickerItem for ModelEntry {
         !self.override_tiers.is_empty()
     }
 
+    fn is_dimmed(&self) -> bool {
+        self.is_provider && !self.usable
+    }
+
+    fn is_spinning(&self) -> bool {
+        self.spinning
+    }
+
+    fn is_hidden(&self) -> bool {
+        self.hidden
+    }
+
     fn is_section_row(&self) -> bool {
         self.is_provider
     }
 }
-
 pub struct ModelPicker {
     picker: ListPicker<ModelEntry>,
     models: Arc<ArcSwapOption<ModelList>>,
@@ -127,12 +138,18 @@ pub struct ModelPicker {
     recents: Vec<String>,
     current_spec: String,
     needs_rebuild: bool,
-    /// Entry to restore on refresh: `(was_recent, spec)`. Seeded from the
-    /// preselection at open so it survives the background list arriving, and
-    /// moved by user navigation.
-    anchor: Option<(bool, String)>,
-    /// Folded providers, by slug.
-    collapsed: BTreeSet<String>,
+    /// `(is_provider, is_recent_copy, spec)` — which row kind the cursor was
+    /// on, so a rebuild finds the same kind again.
+    anchor: Option<(bool, bool, String)>,
+    /// Provider groups the user unfolded; every other group is a single
+    /// row with its model count.
+    expanded: BTreeSet<String>,
+    /// The provider universe as of the last `open`, so rows exist for
+    /// providers discovery has nothing to say about.
+    providers: Vec<ProviderEntry>,
+    /// Providers without credentials are noise until the user is looking
+    /// for one to log into, so they stay hidden behind `&`.
+    show_no_key: bool,
 }
 
 impl ModelPicker {
@@ -145,17 +162,19 @@ impl ModelPicker {
             current_spec: String::new(),
             needs_rebuild: false,
             anchor: None,
-            collapsed: BTreeSet::new(),
+            expanded: BTreeSet::new(),
+            providers: Vec::new(),
+            show_no_key: false,
         }
     }
 
-    pub fn set_collapsed(&mut self, collapsed: BTreeSet<String>) {
-        self.collapsed = collapsed;
+    pub fn set_expanded(&mut self, expanded: BTreeSet<String>) {
+        self.expanded = expanded;
         self.needs_rebuild = true;
     }
 
-    pub fn collapsed_providers(&self) -> &BTreeSet<String> {
-        &self.collapsed
+    pub fn expanded_providers(&self) -> &BTreeSet<String> {
+        &self.expanded
     }
 
     pub fn set_recents(&mut self, recents: Vec<String>) {
@@ -163,8 +182,14 @@ impl ModelPicker {
         self.needs_rebuild = true;
     }
 
-    pub fn open(&mut self, current_spec: &str) {
+    pub fn open(&mut self, current_spec: &str, providers: &[ProviderEntry]) {
         self.current_spec = current_spec.to_owned();
+        self.providers = providers.to_vec();
+        // The group holding the current model starts open, so the picker
+        // opens with a visible "you are here" among the folded rows.
+        if let Some((slug, _)) = current_spec.split_once('/') {
+            self.expanded.insert(slug.to_string());
+        }
         self.anchor = None;
         self.needs_rebuild = false;
         let _ = self.available.poll(self.models.load_full());
@@ -192,9 +217,14 @@ impl ModelPicker {
         let entries = self.load_entries();
         self.picker.replace_items(entries);
         self.show_loading();
-        if let Some((was_recent, spec)) = &self.anchor {
-            self.picker
-                .select_item_by(|e| e.spec == *spec && e.suffix().is_some() == *was_recent);
+        if let Some((was_provider, was_recent, spec)) = &self.anchor {
+            // A model row exists as a Recent copy and in its provider
+            // section; the anchor stays on the kind the user navigated to.
+            self.picker.select_item_by(|e| {
+                e.spec == *spec
+                    && e.is_provider == *was_provider
+                    && (e.suffix.is_some() == *was_recent || e.is_provider)
+            });
         } else {
             self.preselect_current_model();
         }
@@ -202,13 +232,18 @@ impl ModelPicker {
     }
 
     /// A slow provider leaves a short list that looks final without this.
+    /// Once specs have arrived the per-provider spinners take over, and the
+    /// notice would only deny the list that is already there.
     fn show_loading(&mut self) {
-        let loading = self.available.get().is_some_and(|list| list.loading);
+        let loading = self
+            .available
+            .get()
+            .is_some_and(|list| list.loading && list.specs.is_empty());
         self.picker.set_notice(loading.then_some(LOADING_NOTICE));
     }
 
     fn load_entries(&self) -> Vec<ModelEntry> {
-        let specs = self.available.get().map(|list| &list.specs);
+        let list = self.available.get();
         let mut entries = Vec::new();
         for spec in &self.recents {
             if let Some(mut e) = parse_model_entry(spec) {
@@ -217,8 +252,8 @@ impl ModelPicker {
                 entries.push(e);
             }
         }
-        let mut full: Vec<ModelEntry> = specs
-            .map(|s| s.iter().filter_map(|s| parse_model_entry(s)).collect())
+        let mut full: Vec<ModelEntry> = list
+            .map(|l| l.specs.iter().filter_map(|s| parse_model_entry(s)).collect())
             .unwrap_or_default();
         full.sort_by(|a, b| {
             a.provider_display
@@ -227,33 +262,118 @@ impl ModelPicker {
                 .then_with(|| b.free.cmp(&a.free))
                 .then_with(|| a.id.cmp(&b.id))
         });
-        let mut full = full.into_iter().peekable();
-        while let Some(entry) = full.next() {
-            if !self.collapsed.contains(&entry.provider) {
-                entries.push(entry);
+
+        let mut groups: HashMap<String, Vec<ModelEntry>> = HashMap::new();
+        for entry in full {
+            let slug = entry.provider.clone();
+            groups.entry(slug).or_default().push(entry);
+        }
+
+        // One row per provider: the universe supplies auth state and covers
+        // providers discovery says nothing about; a slug only discovery knows
+        // (plugin-owned) still gets its row. Providers without credentials
+        // only list once `&` asked for them.
+        let mut rows: Vec<(String, String)> = self
+            .providers
+            .iter()
+            .filter(|p| self.show_no_key || p.usable())
+            .map(|p| (p.slug.clone(), p.display_name.clone()))
+            .collect();
+        for slug in groups.keys() {
+            if rows.iter().any(|(known, _)| known == slug) {
                 continue;
             }
-            let mut count = 1;
-            while full.next_if(|e| e.provider == entry.provider).is_some() {
-                count += 1;
+            let display = groups[slug][0].provider_display.clone();
+            rows.push((slug.clone(), display));
+        }
+        rows.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+
+        let loading = list.is_some_and(|l| l.loading);
+        for (slug, display) in rows {
+            let count = groups.get(&slug).map_or(0, Vec::len);
+            entries.push(self.provider_row(&slug, &display, count, loading));
+            // A folded group keeps its models in the list, hidden: they must
+            // not show, but a search has to still find them.
+            let hidden = !self.expanded.contains(&slug);
+            if let Some(mut models) = groups.remove(&slug) {
+                for model in &mut models {
+                    model.provider_display = display.clone();
+                    model.hidden = hidden;
+                }
+                entries.extend(models);
             }
-            entries.push(provider_entry(&entry, count));
         }
         entries
     }
 
-    fn preselect_current_model(&mut self) -> bool {
-        if self
-            .picker
-            .select_item_by(|e| e.spec == self.current_spec && e.suffix().is_none())
-            || self.picker.select_item_by(|e| e.spec == self.current_spec)
-        {
-            return true;
+    fn provider_row(
+        &self,
+        slug: &str,
+        display: &str,
+        count: usize,
+        loading: bool,
+    ) -> ModelEntry {
+        let answered = self
+            .available
+            .get()
+            .and_then(|l| l.providers.get(slug));
+        let usable = self
+            .providers
+            .iter()
+            .find(|p| p.slug == slug)
+            .is_none_or(ProviderEntry::usable);
+        let (suffix, spinning) = if !usable {
+            (Some(NO_KEY_LABEL), false)
+        } else if answered.is_none() && loading {
+            (None, true)
+        } else if answered.is_none() {
+            (Some(OFFLINE_LABEL), false)
+        } else if answered.is_some_and(|s| s.warning.is_some()) {
+            (Some(FALLBACK_LABEL), false)
+        } else if count == 0 {
+            (Some(EMPTY_LABEL), false)
+        } else {
+            (None, false)
+        };
+        let plural = if count == 1 { "model" } else { "models" };
+        let label = match Owner::of(slug) {
+            Owner::Custom => format!("{display}{CUSTOM_MARKER}"),
+            _ => display.to_string(),
+        };
+        ModelEntry {
+            spec: slug.to_string(),
+            label,
+            id: slug.to_string(),
+            provider: slug.to_string(),
+            provider_display: display.to_string(),
+            suffix: suffix.map(str::to_string),
+            detail: if count > 0 { format!("{count} {plural}") } else { String::new() },
+            override_tiers: Vec::new(),
+            free: false,
+            is_provider: true,
+            usable,
+            spinning,
+            hidden: false,
         }
-        // The top row might be a folded provider, and Enter there unfolds it
-        // instead of picking a model.
-        self.picker.select_item_by(|e| !e.is_provider);
-        false
+    }
+
+    fn preselect_current_model(&mut self) -> bool {
+        // A Recent copy of the current model does not count: the pick should
+        // land in the provider's own section.
+        self.picker
+            .select_item_by(|e| {
+                e.spec == self.current_spec && !e.is_provider && e.suffix.is_none()
+            })
+            || self
+                .picker
+                .select_item_by(|e| e.spec == self.current_spec && !e.is_provider)
+            || {
+                // Every group starts folded, so the current model may be
+                // behind its provider row. Landing on a fallback row is not
+                // a pick: no anchor comes from it.
+                self.picker.select_item_by(|e| !e.is_provider);
+                false
+            }
     }
 
     pub fn is_open(&self) -> bool {
@@ -272,10 +392,10 @@ impl ModelPicker {
         self.picker.scroll(delta);
     }
 
-    fn selected_anchor(&self) -> Option<(bool, String)> {
+    fn selected_anchor(&self) -> Option<(bool, bool, String)> {
         self.picker
             .selected_item()
-            .map(|e| (e.suffix().is_some(), e.spec.clone()))
+            .map(|e| (e.is_provider, e.suffix.is_some(), e.spec.clone()))
     }
 
     fn track_anchor<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
@@ -299,18 +419,56 @@ impl ModelPicker {
 
     fn fold(&mut self, slug: String, collapse: bool) -> ModelPickerAction {
         if collapse {
-            self.collapsed.insert(slug.clone());
-            // The provider row is keyed by its slug. Following it there means
-            // a second press unfolds what the first one folded.
-            self.anchor = Some((false, slug.clone()));
+            self.expanded.remove(&slug);
         } else {
-            self.collapsed.remove(&slug);
+            self.expanded.insert(slug.clone());
         }
+        // The provider row stays where it was either way, so following it
+        // there keeps the cursor on it through the rebuild, and the next
+        // press toggles back.
+        self.anchor = Some((true, false, slug.clone()));
         self.needs_rebuild = true;
         ModelPickerAction::Collapse(slug, collapse)
     }
 
+    /// One key from anywhere in the list: folded down to just the provider
+    /// rows, or back out to every model.
+    fn fold_all(&mut self) -> ModelPickerAction {
+        let spec_slugs = || {
+            self.available
+                .get()
+                .into_iter()
+                .flat_map(|l| &l.specs)
+                .filter_map(|s| s.split_once('/'))
+                .map(|(slug, _)| slug.to_string())
+        };
+        let visible_slugs = || {
+            self.providers
+                .iter()
+                .filter(|p| self.show_no_key || p.usable())
+                .map(|p| p.slug.clone())
+                .chain(spec_slugs())
+        };
+        let any_expanded = visible_slugs().any(|slug| self.expanded.contains(&slug));
+        if any_expanded {
+            self.expanded.clear();
+        } else {
+            self.expanded.extend(visible_slugs());
+        }
+        self.needs_rebuild = true;
+        self.anchor = self.selected_anchor();
+        ModelPickerAction::Collapse(ALL_PROVIDERS.to_string(), any_expanded)
+    }
+
     fn handle_key_inner(&mut self, key: KeyEvent) -> ModelPickerAction {
+        if key.code == NO_KEY_KEY {
+            self.show_no_key = !self.show_no_key;
+            self.needs_rebuild = true;
+            return ModelPickerAction::Consumed;
+        }
+        if key.code == FOLD_ALL_KEY {
+            return self.fold_all();
+        }
         let on_provider_row = self.picker.selected_item().is_some_and(|e| e.is_provider);
         // Enter on a provider row would hand back a bare slug as the model.
         if key.code == FOLD_KEY || (on_provider_row && key.code == KeyCode::Enter) {
@@ -319,7 +477,19 @@ impl ModelPicker {
             let Some(entry) = self.picker.selected_item() else {
                 return ModelPickerAction::Consumed;
             };
-            let (slug, collapse) = (entry.provider.clone(), !entry.is_provider);
+            // Nothing to fold open for a provider without credentials; the
+            // login flow is what this row has to offer.
+            if on_provider_row && !entry.usable {
+                return ModelPickerAction::Login(entry.provider.clone());
+            }
+            let slug = entry.provider.clone();
+            // A model row only shows in an open group, so its key folds;
+            // the provider row toggles.
+            let collapse = if entry.is_provider {
+                self.expanded.contains(&slug)
+            } else {
+                true
+            };
             return self.fold(slug, collapse);
         }
         if let Some(tier) = tier_for_shortcut(key)
@@ -420,6 +590,7 @@ fn parse_model_entry(spec: &str) -> Option<ModelEntry> {
     let id = model_id.to_string();
     Some(ModelEntry {
         spec: spec.to_string(),
+        label: id.clone(),
         id,
         provider: provider_str.to_string(),
         provider_display,
@@ -428,13 +599,19 @@ fn parse_model_entry(spec: &str) -> Option<ModelEntry> {
         override_tiers,
         free,
         is_provider: false,
+        usable: true,
+        spinning: false,
+        hidden: false,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+
     use crate::components::keybindings::key as kb;
+    use crate::components::provider_auth::Auth as TestAuth;
     use crate::components::{buffer_text, key};
     use crossterm::event::{KeyCode, KeyEvent};
     use maki_providers::ModelInfo;
@@ -454,17 +631,26 @@ mod tests {
         let models = Arc::new(ArcSwapOption::empty());
         models.store(Some(loaded(vec![
             "anthropic/claude-sonnet-4-20250514".into(),
+            "anthropic/claude-opus-4-6-20260101".into(),
         ])));
         let mut p = ModelPicker::new(Arc::clone(&models));
-        p.open("");
+        p.open("anthropic/claude-sonnet-4-20250514", &[]);
         assert_eq!(p.refresh(), Dirty::NO);
 
-        models.store(Some(loaded(vec![SWAPPED_SPEC.into()])));
+        models.store(Some(loaded(vec![
+            "anthropic/claude-sonnet-4-20250514".into(),
+            SWAPPED_SPEC.into(),
+        ])));
         assert_eq!(p.refresh(), Dirty::YES, "{SAME_SIZED_LIST}");
         assert_eq!(
             p.picker.selected_item().map(|e| e.spec.as_str()),
-            Some(SWAPPED_SPEC),
+            Some("anthropic/claude-sonnet-4-20250514"),
             "{SAME_SIZED_LIST}"
+        );
+        let entries = p.load_entries();
+        assert!(
+            entries.iter().any(|e| !e.is_provider && e.spec == SWAPPED_SPEC),
+            "the republished model is listed"
         );
     }
 
@@ -472,6 +658,7 @@ mod tests {
         Arc::new(ModelList {
             specs,
             loading: false,
+            providers: BTreeMap::new(),
         })
     }
 
@@ -481,16 +668,19 @@ mod tests {
         buffer_text(terminal.backend().buffer())
     }
 
-    /// A slow provider must not look like a finished, short list.
+    /// A slow provider must not look like a finished, short list. The global
+    /// notice covers only the nothing-arrived-yet window; per-provider
+    /// spinners take it from there.
     #[test]
     fn loading_row_shows_until_discovery_finishes() {
         let models = Arc::new(ArcSwapOption::empty());
         models.store(Some(Arc::new(ModelList {
-            specs: vec![SWAPPED_SPEC.into()],
+            specs: Vec::new(),
             loading: true,
+            providers: BTreeMap::new(),
         })));
         let mut p = ModelPicker::new(Arc::clone(&models));
-        p.open("");
+        p.open("", &[]);
         assert!(rendered(&mut p).contains(LOADING_NOTICE));
 
         models.store(Some(loaded(vec![SWAPPED_SPEC.into()])));
@@ -508,6 +698,12 @@ mod tests {
         models
     }
 
+    fn open_test_models(current_spec: &str) -> ModelPicker {
+        let mut p = ModelPicker::new(test_models());
+        p.open(current_spec, &[]);
+        p
+    }
+
     const FOLD_SPEC: &str = "anthropic/claude-sonnet-4-20250514";
     const KEPT_OPEN: &str = "the fold is not a choice, so the picker stays up";
     const PROVIDER: &str = "anthropic";
@@ -515,76 +711,83 @@ mod tests {
     fn lists_models_of(p: &ModelPicker, slug: &str) -> bool {
         p.load_entries()
             .iter()
-            .any(|e| !e.is_provider && e.provider == slug)
+            .any(|e| !e.is_provider && !e.hidden && e.provider == slug)
     }
 
-    /// A list nobody has folded has no provider rows at all, so it reads
-    /// exactly as it did before folding existed.
+    /// Every group starts folded down to its row, which says how much is
+    /// behind it; the key opens it, and the current model's provider comes
+    /// up open so the pick has a visible "you are here".
     #[test]
-    fn a_header_is_only_selectable_once_its_provider_is_folded() {
-        let mut p = ModelPicker::new(test_models());
-        p.open(FOLD_SPEC);
-        assert!(!p.load_entries().iter().any(|e| e.is_provider));
+    fn a_provider_row_folds_and_opens_its_group() {
+        let mut p = open_test_models(FOLD_SPEC);
 
-        let action = p.handle_key(key(KeyCode::Char('%')));
         assert!(
-            matches!(&action, ModelPickerAction::Collapse(slug, true) if slug == PROVIDER),
-            "the key folds the provider of whichever row is selected"
+            lists_models_of(&p, PROVIDER),
+            "the current model's provider starts open"
         );
-        assert!(p.is_open(), "{KEPT_OPEN}");
-
+        assert!(!lists_models_of(&p, "zai"), "every other group starts folded");
         let entries = p.load_entries();
         let row = entries
             .iter()
-            .find(|e| e.is_provider && e.provider == PROVIDER)
+            .find(|e| e.is_provider && e.provider == "zai")
             .expect("the folded provider keeps a row");
-        assert!(row.detail.contains('2'), "saying how much is behind it");
-        assert!(!lists_models_of(&p, PROVIDER));
-        assert!(lists_models_of(&p, "zai"), "other providers are untouched");
+        assert_eq!(row.detail, "1 model", "saying how much is behind it");
+
+        p.picker.select_item_by(|e| e.is_provider && e.provider == "zai");
+        let action = p.handle_key(key(KeyCode::Char('%')));
+        assert!(
+            matches!(&action, ModelPickerAction::Collapse(slug, false) if slug == "zai"),
+            "the key opens the group of whichever row is selected"
+        );
+        assert!(p.is_open(), "{KEPT_OPEN}");
+        assert!(lists_models_of(&p, "zai"));
+
+        let _ = p.refresh();
+        p.handle_key(key(KeyCode::Char('%')));
+        assert!(!lists_models_of(&p, "zai"), "the same key folds it back");
     }
 
     #[test_case(key(KeyCode::Char('%')) ; "the_fold_key")]
     #[test_case(key(KeyCode::Enter)     ; "enter")]
-    fn a_saved_fold_opens_folded_and_unfolds_again(unfold: KeyEvent) {
+    fn a_saved_expansion_opens_open_and_folds_again(unfold: KeyEvent) {
         let mut p = ModelPicker::new(test_models());
-        p.set_collapsed(BTreeSet::from([PROVIDER.to_owned()]));
-        p.open("zai/glm-5");
-        assert!(!lists_models_of(&p, PROVIDER));
-        assert!(p.picker.select_item_by(|e| e.is_provider));
+        p.set_expanded(BTreeSet::from([PROVIDER.to_owned()]));
+        p.open("zai/glm-5", &[]);
+        assert!(lists_models_of(&p, PROVIDER));
+        assert!(p.picker.select_item_by(|e| e.is_provider && e.provider == PROVIDER));
 
         let action = p.handle_key(unfold);
         assert!(
-            matches!(&action, ModelPickerAction::Collapse(slug, false) if slug == PROVIDER),
-            "the row answers the key with an unfold"
+            matches!(&action, ModelPickerAction::Collapse(slug, true) if slug == PROVIDER),
+            "the row answers the key with a fold"
         );
         assert!(p.is_open(), "{KEPT_OPEN}");
-        assert!(lists_models_of(&p, PROVIDER), "its models come back");
+        assert!(!lists_models_of(&p, PROVIDER), "its models go away");
     }
 
-    /// The cursor follows the fold onto the new provider row, so a second
+    /// The cursor follows the fold onto the provider row, so a second
     /// press undoes the first.
     #[test]
     fn the_fold_key_toggles() {
-        let mut p = ModelPicker::new(test_models());
-        p.open(FOLD_SPEC);
+        let mut p = open_test_models(FOLD_SPEC);
 
         p.handle_key(key(KeyCode::Char('%')));
-        assert_eq!(
-            p.collapsed_providers(),
-            &BTreeSet::from([PROVIDER.to_owned()])
-        );
+        assert!(p.expanded_providers().is_empty());
 
         // The app rebuilds the list on its next tick.
         let _ = p.refresh();
         p.handle_key(key(KeyCode::Char('%')));
-        assert!(p.collapsed_providers().is_empty());
+        assert_eq!(
+            p.expanded_providers(),
+            &BTreeSet::from([PROVIDER.to_owned()])
+        );
     }
 
     #[test_case(key(KeyCode::Esc)          ; "esc_closes")]
     #[test_case(kb::QUIT.to_key_event()    ; "ctrl_c_closes")]
     fn close_keys(cancel_key: KeyEvent) {
         let mut p = ModelPicker::new(test_models());
-        p.open("");
+        p.open("", &[]);
         let action = p.handle_key(cancel_key);
         assert!(matches!(action, ModelPickerAction::Close));
         assert!(!p.is_open());
@@ -597,10 +800,11 @@ mod tests {
             "anthropic/claude-sonnet-4-20250514".into(),
         ])));
         let mut p = ModelPicker::new(models.clone());
-        p.open("");
+        p.open("", &[]);
 
-        p.handle_key(key(KeyCode::Char('o')));
-        p.handle_key(key(KeyCode::Char('p')));
+        for c in ['o', 'p', 'u', 's'] {
+            p.handle_key(key(KeyCode::Char(c)));
+        }
 
         models.store(Some(loaded(vec![
             "anthropic/claude-sonnet-4-20250514".into(),
@@ -611,14 +815,14 @@ mod tests {
         let action = p.handle_key(key(KeyCode::Enter));
         assert!(
             matches!(action, ModelPickerAction::Select(ref s) if s.contains("opus")),
-            "after refresh, 'op' filter should match opus"
+            "after refresh, the filter should still match opus"
         );
     }
 
     #[test]
     fn open_preselects_current_model() {
         let mut p = ModelPicker::new(test_models());
-        p.open("anthropic/claude-opus-4-6-20260101");
+        p.open("anthropic/claude-opus-4-6-20260101", &[]);
         let action = p.handle_key(key(KeyCode::Enter));
         assert!(
             matches!(action, ModelPickerAction::Select(ref s) if s == "anthropic/claude-opus-4-6-20260101")
@@ -652,7 +856,7 @@ mod tests {
     #[test_case(key(KeyCode::Char('€')),           ModelTier::Compaction ; "legacy_euro_compaction")]
     fn tier_shortcut_assigns_and_keeps_picker_open(k: KeyEvent, want: ModelTier) {
         let mut p = ModelPicker::new(test_models());
-        p.open("anthropic/claude-sonnet-4-20250514");
+        p.open("anthropic/claude-sonnet-4-20250514", &[]);
         let action = p.handle_key(k);
         assert!(
             matches!(&action, ModelPickerAction::AssignTier(s, t)
@@ -666,7 +870,7 @@ mod tests {
     fn refresh_preserves_selection_for_current_model() {
         let models = Arc::new(ArcSwapOption::empty());
         let mut p = ModelPicker::new(models.clone());
-        p.open("anthropic/claude-opus-4-6-20260101");
+        p.open("anthropic/claude-opus-4-6-20260101", &[]);
 
         models.store(Some(loaded(vec![
             "anthropic/claude-sonnet-4-20250514".into(),
@@ -690,7 +894,7 @@ mod tests {
             "zai/glm-5".into(),
             "anthropic/claude-sonnet-4-20250514".into(),
         ]);
-        p.open("anthropic/claude-opus-4-6-20260101");
+        p.open("anthropic/claude-opus-4-6-20260101", &[]);
 
         p.picker.select(0);
         let action = p.handle_key(key(KeyCode::Enter));
@@ -703,7 +907,7 @@ mod tests {
             "zai/glm-5".into(),
             "anthropic/claude-sonnet-4-20250514".into(),
         ]);
-        p.open("zai/glm-5");
+        p.open("zai/glm-5", &[]);
         let action = p.handle_key(key(KeyCode::Enter));
         assert!(
             matches!(action, ModelPickerAction::Select(ref s) if s == "zai/glm-5"),
@@ -719,15 +923,17 @@ mod tests {
             "zai/glm-5".into(),
             "anthropic/claude-sonnet-4-20250514".into(),
         ]);
-        p.open("anthropic/claude-sonnet-4-20250514");
-        p.handle_key(key(KeyCode::Down));
+        p.open("anthropic/claude-sonnet-4-20250514", &[]);
+        for _ in 0..3 {
+            p.handle_key(key(KeyCode::Down));
+        }
         let action = p.handle_key(key(KeyCode::Enter));
         assert!(
             matches!(action, ModelPickerAction::Select(ref s) if s == "zai/glm-5"),
-            "selecting the provider entry should return its spec",
+            "navigating past the sections should land on the zai model",
         );
 
-        p.open("zai/glm-5");
+        p.open("zai/glm-5", &[]);
 
         let entry = p.picker.selected_item().expect("selection on reopen");
         assert_eq!(entry.spec, "zai/glm-5");
@@ -738,6 +944,168 @@ mod tests {
         );
     }
 
+    fn provider_entry_of(slug: &str, display: &str, usable: bool) -> ProviderEntry {
+        ProviderEntry {
+            slug: slug.to_string(),
+            display_name: display.to_string(),
+            auth: if usable {
+                TestAuth::Saved
+            } else {
+                TestAuth::Missing
+            },
+            configured: false,
+            from_catalog: false,
+        }
+    }
+
+    /// Providers without credentials stay out of the list until `&` asks
+    /// for them; revealed, they are greyed out and Enter hands back the
+    /// slug for the login flow instead of a model.
+    #[test]
+    fn no_key_providers_stay_hidden_until_asked_then_answer_enter_with_login() {
+        let models = Arc::new(ArcSwapOption::empty());
+        models.store(Some(loaded(vec!["zai/glm-5".into()])));
+        let mut p = ModelPicker::new(models);
+        p.open(
+            "",
+            &[provider_entry_of("openrouter", "OpenRouter", false)],
+        );
+
+        assert!(
+            !p.load_entries().iter().any(|e| e.provider == "openrouter"),
+            "the default list is the providers that can be used"
+        );
+        let entries = p.load_entries();
+        let zai = entries
+            .iter()
+            .find(|e| e.is_provider && e.provider == "zai")
+            .expect("the usable provider keeps its row");
+        assert!(!zai.is_dimmed(), "usable providers are untouched");
+
+        p.handle_key(key(NO_KEY_KEY));
+        let _ = p.refresh();
+        let entries = p.load_entries();
+        let row = entries
+            .iter()
+            .find(|e| e.is_provider && e.provider == "openrouter")
+            .expect("& reveals the no-key provider");
+        assert_eq!(row.suffix.as_deref(), Some(NO_KEY_LABEL));
+        assert!(row.is_dimmed());
+
+        assert!(p.picker.select_item_by(|e| e.is_provider && e.provider == "openrouter"));
+        let action = p.handle_key(key(KeyCode::Enter));
+        assert!(matches!(action, ModelPickerAction::Login(slug) if slug == "openrouter"));
+        assert!(p.is_open(), "{KEPT_OPEN}");
+    }
+
+    /// The toggle sticks across reopens within the session, and folds only
+    /// ever touch the rows that are visible.
+    #[test]
+    fn no_key_toggle_survives_reopen_and_fold_all_skips_hidden_providers() {
+        let models = Arc::new(ArcSwapOption::empty());
+        models.store(Some(loaded(vec!["zai/glm-5".into()])));
+        let mut p = ModelPicker::new(models);
+        p.open(
+            "",
+            &[
+                provider_entry_of("openrouter", "OpenRouter", false),
+                provider_entry_of("anthropic", "Anthropic", true),
+            ],
+        );
+        p.handle_key(key(NO_KEY_KEY));
+        p.open("", &[provider_entry_of("openrouter", "OpenRouter", false)]);
+        assert!(
+            p.load_entries().iter().any(|e| e.provider == "openrouter"),
+            "the toggle is a picker setting, not a per-open one"
+        );
+
+        // Hidden again, open-everything leaves the unlisted row alone.
+        p.handle_key(key(NO_KEY_KEY));
+        p.handle_key(key(FOLD_ALL_KEY));
+        assert!(
+            !p.expanded_providers().contains("openrouter"),
+            "opening everything must not open rows that are not listed"
+        );
+        assert!(p.expanded_providers().contains("zai"));
+    }
+
+    /// The default view already is just the provider rows, so the first
+    /// press opens every group and the second closes them all again.
+    #[test]
+    fn fold_all_opens_every_group_and_back() {
+        let mut p = open_test_models(FOLD_SPEC);
+
+        // The current model's provider came up open; the first press closes
+        // it, the second opens everything, the third closes it all again.
+        let action = p.handle_key(key(KeyCode::Char('*')));
+        assert!(matches!(&action, ModelPickerAction::Collapse(slug, true) if slug == ALL_PROVIDERS));
+        assert!(!lists_models_of(&p, PROVIDER));
+        assert!(!lists_models_of(&p, "zai"));
+
+        let action = p.handle_key(key(KeyCode::Char('*')));
+        assert!(matches!(&action, ModelPickerAction::Collapse(slug, false) if slug == ALL_PROVIDERS));
+        assert!(lists_models_of(&p, PROVIDER));
+        assert!(lists_models_of(&p, "zai"));
+
+        let action = p.handle_key(key(KeyCode::Char('*')));
+        assert!(matches!(&action, ModelPickerAction::Collapse(slug, true) if slug == ALL_PROVIDERS));
+        assert!(!lists_models_of(&p, PROVIDER));
+        assert!(!lists_models_of(&p, "zai"));
+    }
+
+    /// A probe that fell back to static specs says so on the provider row,
+    /// not just in a status-bar flash.
+    #[test]
+    fn a_degraded_probe_marks_its_provider_row() {
+        let models = Arc::new(ArcSwapOption::empty());
+        let mut providers = BTreeMap::new();
+        providers.insert(
+            "anthropic".to_string(),
+            maki_providers::models_cache::ProviderStatus {
+                models: 2,
+                warning: Some("Anthropic: down (using static fallback)".into()),
+            },
+        );
+        models.store(Some(Arc::new(ModelList {
+            specs: vec![
+                "anthropic/claude-sonnet-4-20250514".into(),
+                "anthropic/claude-opus-4-6-20260101".into(),
+            ],
+            loading: false,
+            providers,
+        })));
+        let mut p = ModelPicker::new(models);
+        p.open("", &[]);
+
+        let entries = p.load_entries();
+        let row = entries
+            .iter()
+            .find(|e| e.is_provider && e.provider == PROVIDER)
+            .expect("the provider keeps a row");
+        assert_eq!(row.suffix.as_deref(), Some(FALLBACK_LABEL));
+        assert_eq!(row.detail, "2 models");
+    }
+
+    /// A provider whose probe never landed reads as offline, not as empty.
+    #[test]
+    fn an_unanswered_probe_marks_its_provider_row_offline() {
+        let models = Arc::new(ArcSwapOption::empty());
+        models.store(Some(loaded(vec!["zai/glm-5".into()])));
+        let mut p = ModelPicker::new(models);
+        p.open(
+            "",
+            &[provider_entry_of("mistral", "Mistral", true)],
+        );
+
+        let entries = p.load_entries();
+        let row = entries
+            .iter()
+            .find(|e| e.is_provider && e.provider == "mistral")
+            .expect("the universe provider keeps a row");
+        assert_eq!(row.suffix.as_deref(), Some(OFFLINE_LABEL));
+        assert!(!row.is_dimmed());
+    }
+
     #[test]
     fn refresh_keeps_selection_on_provider_entry() {
         let models = test_models();
@@ -746,7 +1114,10 @@ mod tests {
             "zai/glm-5".into(),
             "anthropic/claude-sonnet-4-20250514".into(),
         ]);
-        p.open("anthropic/claude-sonnet-4-20250514");
+        p.open("anthropic/claude-sonnet-4-20250514", &[]);
+        p.handle_key(key(KeyCode::Down));
+        p.handle_key(key(KeyCode::Enter));
+        let _ = p.refresh();
         p.handle_key(key(KeyCode::Down));
         p.handle_key(key(KeyCode::Char('!')));
 
@@ -769,7 +1140,7 @@ mod tests {
             "zai/glm-5".into(),
             "anthropic/claude-sonnet-4-20250514".into(),
         ]);
-        p.open("anthropic/claude-sonnet-4-20250514");
+        p.open("anthropic/claude-sonnet-4-20250514", &[]);
 
         models.store(None);
         let _ = p.refresh();
@@ -801,7 +1172,7 @@ mod tests {
             "zai/glm-5".into(),
             "anthropic/claude-sonnet-4-20250514".into(),
         ]);
-        p.open("anthropic/claude-sonnet-4-20250514");
+        p.open("anthropic/claude-sonnet-4-20250514", &[]);
 
         let entry = p.picker.selected_item().expect("selection on open");
         assert_eq!(
@@ -831,7 +1202,7 @@ mod tests {
         let models = Arc::new(ArcSwapOption::empty());
         let mut p = ModelPicker::new(models.clone());
         p.set_recents(vec!["zai/glm-5".into()]);
-        p.open("anthropic/claude-opus-4-6-20260101");
+        p.open("anthropic/claude-opus-4-6-20260101", &[]);
 
         models.store(Some(loaded(vec![
             "anthropic/claude-opus-4-6-20260101".into(),
@@ -850,7 +1221,7 @@ mod tests {
         let models = Arc::new(ArcSwapOption::empty());
         let mut p = ModelPicker::new(models.clone());
         p.set_recents(vec!["anthropic/claude-sonnet-4-20250514".into()]);
-        p.open("anthropic/claude-sonnet-4-20250514");
+        p.open("anthropic/claude-sonnet-4-20250514", &[]);
 
         for specs in [
             vec!["anthropic/claude-sonnet-4-20250514".to_string()],
@@ -862,6 +1233,7 @@ mod tests {
             models.store(Some(Arc::new(ModelList {
                 specs,
                 loading: true,
+                providers: BTreeMap::new(),
             })));
             let _ = p.refresh();
             let entry = p.picker.selected_item().expect("selection after a batch");
@@ -881,7 +1253,7 @@ mod tests {
             "zai/glm-5".into(),
             "anthropic/claude-sonnet-4-20250514".into(),
         ]);
-        p.open("anthropic/claude-sonnet-4-20250514");
+        p.open("anthropic/claude-sonnet-4-20250514", &[]);
         models.store(None);
         let _ = p.refresh();
         p.handle_key(key(KeyCode::Down));
@@ -910,7 +1282,7 @@ mod tests {
             "zai/glm-5".into(),
             "anthropic/claude-sonnet-4-20250514".into(),
         ]);
-        p.open("anthropic/claude-sonnet-4-20250514");
+        p.open("anthropic/claude-sonnet-4-20250514", &[]);
         p.handle_key(key(KeyCode::Char('g')));
         p.handle_key(key(KeyCode::Char('l')));
         p.handle_key(key(KeyCode::Char('m')));
@@ -986,9 +1358,14 @@ mod tests {
             OX_SPEC.into(),
         ])));
         let mut p = ModelPicker::new(models);
-        p.open("");
+        p.open("", &[]);
         let entries = p.load_entries();
-        let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
+        let ids: Vec<&str> = entries
+            .iter()
+            .filter(|e| !e.is_provider)
+            .map(|e| e.id.as_str())
+            .collect();
         assert_eq!(ids, ["stealth/ox-alpha", PAID_ID]);
     }
 }
+
