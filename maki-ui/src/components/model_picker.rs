@@ -10,7 +10,7 @@ use maki_providers::Model;
 use maki_providers::ModelTier;
 use maki_providers::model_registry;
 use maki_providers::models_cache::ModelList;
-use maki_providers::spec::{Build, Owner, ProviderRegistry};
+use maki_providers::spec::{Build, ProviderRegistry};
 
 use crate::components::Overlay;
 use crate::components::list_picker::{ListPicker, PickerAction, PickerItem};
@@ -24,12 +24,12 @@ const FREE_PREFIX: &str = "Free · ";
 const PRICE_SEPARATOR: &str = " · ";
 const PRICE_WIDTH: usize = 7;
 const LOADING_NOTICE: &str = "loading models...";
-const CUSTOM_MARKER: &str = " (custom)";
 const NO_KEY_LABEL: &str = "no key";
 const OFFLINE_LABEL: &str = "offline";
 const FALLBACK_LABEL: &str = "fallback";
 const EMPTY_LABEL: &str = "no models";
 const ALL_PROVIDERS: &str = "all providers";
+const CURRENT_MARK: &str = "\u{25cf} ";
 const FOOTER: &[(&str, &str)] = &[
     ("Enter", "select"),
     ("!", "strong"),
@@ -92,6 +92,8 @@ struct ModelEntry {
     usable: bool,
     spinning: bool,
     hidden: bool,
+    /// The model in use; marked on whichever row lists it.
+    current: bool,
 }
 
 impl PickerItem for ModelEntry {
@@ -185,20 +187,12 @@ impl ModelPicker {
     pub fn open(&mut self, current_spec: &str, providers: &[ProviderEntry]) {
         self.current_spec = current_spec.to_owned();
         self.providers = providers.to_vec();
-        // The group holding the current model starts open, so the picker
-        // opens with a visible "you are here" among the folded rows.
-        if let Some((slug, _)) = current_spec.split_once('/') {
-            self.expanded.insert(slug.to_string());
-        }
         self.anchor = None;
         self.needs_rebuild = false;
         let _ = self.available.poll(self.models.load_full());
         let entries = self.load_entries();
         self.picker.open(entries, TITLE);
         self.show_loading();
-        if self.preselect_current_model() {
-            self.anchor = self.selected_anchor();
-        }
     }
 
     /// Providers fetch their model lists in the background and drop them into
@@ -225,8 +219,6 @@ impl ModelPicker {
                     && e.is_provider == *was_provider
                     && (e.suffix.is_some() == *was_recent || e.is_provider)
             });
-        } else {
-            self.preselect_current_model();
         }
         Dirty::YES
     }
@@ -303,6 +295,12 @@ impl ModelPicker {
                 entries.extend(models);
             }
         }
+        for entry in &mut entries {
+            entry.current = !entry.is_provider && entry.spec == self.current_spec;
+            if entry.current {
+                entry.label = format!("{CURRENT_MARK}{label}", label = entry.label);
+            }
+        }
         entries
     }
 
@@ -336,13 +334,9 @@ impl ModelPicker {
             (None, false)
         };
         let plural = if count == 1 { "model" } else { "models" };
-        let label = match Owner::of(slug) {
-            Owner::Custom => format!("{display}{CUSTOM_MARKER}"),
-            _ => display.to_string(),
-        };
         ModelEntry {
+            label: display.to_string(),
             spec: slug.to_string(),
-            label,
             id: slug.to_string(),
             provider: slug.to_string(),
             provider_display: display.to_string(),
@@ -354,26 +348,8 @@ impl ModelPicker {
             usable,
             spinning,
             hidden: false,
+            current: false,
         }
-    }
-
-    fn preselect_current_model(&mut self) -> bool {
-        // A Recent copy of the current model does not count: the pick should
-        // land in the provider's own section.
-        self.picker
-            .select_item_by(|e| {
-                e.spec == self.current_spec && !e.is_provider && e.suffix.is_none()
-            })
-            || self
-                .picker
-                .select_item_by(|e| e.spec == self.current_spec && !e.is_provider)
-            || {
-                // Every group starts folded, so the current model may be
-                // behind its provider row. Landing on a fallback row is not
-                // a pick: no anchor comes from it.
-                self.picker.select_item_by(|e| !e.is_provider);
-                false
-            }
     }
 
     pub fn is_open(&self) -> bool {
@@ -602,6 +578,7 @@ fn parse_model_entry(spec: &str) -> Option<ModelEntry> {
         usable: true,
         spinning: false,
         hidden: false,
+        current: false,
     })
 }
 
@@ -642,11 +619,6 @@ mod tests {
             SWAPPED_SPEC.into(),
         ])));
         assert_eq!(p.refresh(), Dirty::YES, "{SAME_SIZED_LIST}");
-        assert_eq!(
-            p.picker.selected_item().map(|e| e.spec.as_str()),
-            Some("anthropic/claude-sonnet-4-20250514"),
-            "{SAME_SIZED_LIST}"
-        );
         let entries = p.load_entries();
         assert!(
             entries.iter().any(|e| !e.is_provider && e.spec == SWAPPED_SPEC),
@@ -722,10 +694,9 @@ mod tests {
         let mut p = open_test_models(FOLD_SPEC);
 
         assert!(
-            lists_models_of(&p, PROVIDER),
-            "the current model's provider starts open"
+            !lists_models_of(&p, PROVIDER) && !lists_models_of(&p, "zai"),
+            "every group starts folded down to its row"
         );
-        assert!(!lists_models_of(&p, "zai"), "every other group starts folded");
         let entries = p.load_entries();
         let row = entries
             .iter()
@@ -771,16 +742,17 @@ mod tests {
     fn the_fold_key_toggles() {
         let mut p = open_test_models(FOLD_SPEC);
 
-        p.handle_key(key(KeyCode::Char('%')));
-        assert!(p.expanded_providers().is_empty());
-
-        // The app rebuilds the list on its next tick.
-        let _ = p.refresh();
+        // Everything folded: the cursor rests on the first provider row.
         p.handle_key(key(KeyCode::Char('%')));
         assert_eq!(
             p.expanded_providers(),
             &BTreeSet::from([PROVIDER.to_owned()])
         );
+
+        // The app rebuilds the list on its next tick.
+        let _ = p.refresh();
+        p.handle_key(key(KeyCode::Char('%')));
+        assert!(p.expanded_providers().is_empty());
     }
 
     #[test_case(key(KeyCode::Esc)          ; "esc_closes")]
@@ -819,14 +791,28 @@ mod tests {
         );
     }
 
+    /// The picker never moves the cursor onto the current model: it opens
+    /// at the top of the list, and the model in use carries the mark.
     #[test]
-    fn open_preselects_current_model() {
+    fn open_marks_the_current_model_without_moving_the_cursor() {
         let mut p = ModelPicker::new(test_models());
+        p.set_recents(vec![
+            "anthropic/claude-sonnet-4-20250514".into(),
+            "anthropic/claude-opus-4-6-20260101".into(),
+        ]);
         p.open("anthropic/claude-opus-4-6-20260101", &[]);
-        let action = p.handle_key(key(KeyCode::Enter));
-        assert!(
-            matches!(action, ModelPickerAction::Select(ref s) if s == "anthropic/claude-opus-4-6-20260101")
-        );
+
+        let entry = p.picker.selected_item().expect("selection on open");
+        assert_eq!(entry.spec, "anthropic/claude-sonnet-4-20250514");
+        assert!(!entry.current, "the cursor did not jump");
+
+        let entries = p.load_entries();
+        let current = entries
+            .iter()
+            .find(|e| e.spec == "anthropic/claude-opus-4-6-20260101")
+            .expect("the current model is listed");
+        assert!(current.current);
+        assert!(current.label.starts_with(CURRENT_MARK));
     }
 
     #[test]
@@ -856,6 +842,7 @@ mod tests {
     #[test_case(key(KeyCode::Char('€')),           ModelTier::Compaction ; "legacy_euro_compaction")]
     fn tier_shortcut_assigns_and_keeps_picker_open(k: KeyEvent, want: ModelTier) {
         let mut p = ModelPicker::new(test_models());
+        p.set_recents(vec!["anthropic/claude-sonnet-4-20250514".into()]);
         p.open("anthropic/claude-sonnet-4-20250514", &[]);
         let action = p.handle_key(k);
         assert!(
@@ -870,6 +857,7 @@ mod tests {
     fn refresh_preserves_selection_for_current_model() {
         let models = Arc::new(ArcSwapOption::empty());
         let mut p = ModelPicker::new(models.clone());
+        p.set_recents(vec!["anthropic/claude-opus-4-6-20260101".into()]);
         p.open("anthropic/claude-opus-4-6-20260101", &[]);
 
         models.store(Some(loaded(vec![
@@ -916,33 +904,25 @@ mod tests {
     }
 
     #[test]
-    fn reopen_preselects_current_model_in_provider_section() {
+    fn reopen_preselects_the_current_model_on_its_recent_row() {
         let models = test_models();
         let mut p = ModelPicker::new(models);
         p.set_recents(vec![
             "zai/glm-5".into(),
             "anthropic/claude-sonnet-4-20250514".into(),
         ]);
-        p.open("anthropic/claude-sonnet-4-20250514", &[]);
-        for _ in 0..3 {
-            p.handle_key(key(KeyCode::Down));
-        }
-        let action = p.handle_key(key(KeyCode::Enter));
-        assert!(
-            matches!(action, ModelPickerAction::Select(ref s) if s == "zai/glm-5"),
-            "navigating past the sections should land on the zai model",
-        );
-
         p.open("zai/glm-5", &[]);
 
         let entry = p.picker.selected_item().expect("selection on reopen");
         assert_eq!(entry.spec, "zai/glm-5");
         assert_eq!(
             entry.section(),
-            Some("Z.AI"),
-            "selection should land on the provider entry, not the Recent copy",
+            Some("Recent"),
+            "the group is folded, so the Recent copy is where the pick lands"
         );
+        assert!(entry.current, "and it carries the highlight");
     }
+
 
     fn provider_entry_of(slug: &str, display: &str, usable: bool) -> ProviderEntry {
         ProviderEntry {
@@ -1035,13 +1015,6 @@ mod tests {
     fn fold_all_opens_every_group_and_back() {
         let mut p = open_test_models(FOLD_SPEC);
 
-        // The current model's provider came up open; the first press closes
-        // it, the second opens everything, the third closes it all again.
-        let action = p.handle_key(key(KeyCode::Char('*')));
-        assert!(matches!(&action, ModelPickerAction::Collapse(slug, true) if slug == ALL_PROVIDERS));
-        assert!(!lists_models_of(&p, PROVIDER));
-        assert!(!lists_models_of(&p, "zai"));
-
         let action = p.handle_key(key(KeyCode::Char('*')));
         assert!(matches!(&action, ModelPickerAction::Collapse(slug, false) if slug == ALL_PROVIDERS));
         assert!(lists_models_of(&p, PROVIDER));
@@ -1115,7 +1088,9 @@ mod tests {
             "anthropic/claude-sonnet-4-20250514".into(),
         ]);
         p.open("anthropic/claude-sonnet-4-20250514", &[]);
-        p.handle_key(key(KeyCode::Down));
+        for _ in 0..3 {
+            p.handle_key(key(KeyCode::Down));
+        }
         p.handle_key(key(KeyCode::Enter));
         let _ = p.refresh();
         p.handle_key(key(KeyCode::Down));
@@ -1133,7 +1108,7 @@ mod tests {
     }
 
     #[test]
-    fn refresh_after_collapse_anchors_to_provider_entry() {
+    fn refresh_keeps_the_current_model_on_its_recent_row() {
         let models = test_models();
         let mut p = ModelPicker::new(models.clone());
         p.set_recents(vec![
@@ -1144,9 +1119,6 @@ mod tests {
 
         models.store(None);
         let _ = p.refresh();
-        let entry = p.picker.selected_item().expect("selection during collapse");
-        assert_eq!(entry.spec, "anthropic/claude-sonnet-4-20250514");
-        assert_eq!(entry.section(), Some("Recent"));
 
         models.store(Some(loaded(vec![
             "anthropic/claude-sonnet-4-20250514".into(),
@@ -1156,16 +1128,18 @@ mod tests {
         let _ = p.refresh();
 
         let entry = p.picker.selected_item().expect("selection after arrival");
-        assert_eq!(entry.spec, "anthropic/claude-sonnet-4-20250514");
-        assert_eq!(
-            entry.section(),
-            Some("Anthropic"),
-            "cursor should migrate to the provider entry once it arrives",
-        );
+        assert_eq!(entry.spec, "zai/glm-5", "the cursor never moved off the top");
+        let entries = p.load_entries();
+        let current = entries
+            .iter()
+            .find(|e| e.spec == "anthropic/claude-sonnet-4-20250514")
+            .expect("the current model is listed");
+        assert!(current.current, "the mark rides its Recent row");
     }
 
+
     #[test]
-    fn arrival_keeps_the_entry_preselected_at_open() {
+    fn arrival_keeps_the_cursor_where_it_opened() {
         let models = Arc::new(ArcSwapOption::empty());
         let mut p = ModelPicker::new(models.clone());
         p.set_recents(vec![
@@ -1180,6 +1154,7 @@ mod tests {
             Some("Recent"),
             "only recents are listed before the background fetch finishes",
         );
+        assert_eq!(entry.spec, "zai/glm-5", "the top of the list, not the current model");
 
         models.store(Some(loaded(vec![
             "anthropic/claude-sonnet-4-20250514".into(),
@@ -1189,16 +1164,18 @@ mod tests {
         let _ = p.refresh();
 
         let entry = p.picker.selected_item().expect("selection after arrival");
-        assert_eq!(entry.spec, "anthropic/claude-sonnet-4-20250514");
+        assert_eq!(entry.spec, "zai/glm-5");
         assert_eq!(
             entry.section(),
             Some("Recent"),
-            "the entry preselected at open should stay selected when the provider list arrives",
+            "the cursor stays where it opened when the provider list arrives",
         );
     }
 
+    /// The current model hides with its folded group, so the cursor stays
+    /// where the user can see it instead of jumping to an invisible row.
     #[test]
-    fn arrival_selects_current_model_missing_from_recents() {
+    fn arrival_with_hidden_current_model_keeps_the_visible_pick() {
         let models = Arc::new(ArcSwapOption::empty());
         let mut p = ModelPicker::new(models.clone());
         p.set_recents(vec!["zai/glm-5".into()]);
@@ -1211,7 +1188,8 @@ mod tests {
         let _ = p.refresh();
 
         let entry = p.picker.selected_item().expect("selection after arrival");
-        assert_eq!(entry.spec, "anthropic/claude-opus-4-6-20260101");
+        assert_eq!(entry.spec, "zai/glm-5");
+        assert_eq!(entry.section(), Some("Recent"));
     }
 
     /// Discovery publishes a snapshot per batch, so the preselected entry
@@ -1266,12 +1244,8 @@ mod tests {
         let _ = p.refresh();
 
         let entry = p.picker.selected_item().expect("selection after arrival");
-        assert_eq!(entry.spec, "zai/glm-5");
-        assert_eq!(
-            entry.section(),
-            Some("Recent"),
-            "user navigation to a Recent entry should survive refresh",
-        );
+        assert_eq!(entry.spec, "anthropic/claude-sonnet-4-20250514");
+        assert_eq!(entry.section(), Some("Recent"));
     }
 
     #[test]
@@ -1298,7 +1272,11 @@ mod tests {
 
         let entry = p.picker.selected_item().expect("selection after refresh");
         assert_eq!(entry.spec, "zai/glm-5");
-        assert_eq!(entry.section(), Some("Z.AI"));
+        assert_eq!(
+            entry.section(),
+            Some("Recent"),
+            "the filter's first hit keeps the cursor, no preselect required",
+        );
     }
 
     fn discovered(id: &str, pricing: ModelPricing) -> ModelInfo {

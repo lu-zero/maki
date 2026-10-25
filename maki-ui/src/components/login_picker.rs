@@ -100,10 +100,12 @@ enum Step {
     CustomProtocol {
         picker: ListPicker<ProtocolItem>,
         slug: String,
+        name: String,
     },
     CustomUrl {
         input: TextBuffer,
         slug: String,
+        name: String,
         protocol: String,
     },
     BuiltinUrl {
@@ -141,9 +143,11 @@ enum StepAction {
     GoCustomName,
     GoCustomProtocol {
         slug: String,
+        name: String,
     },
     GoCustomUrl {
         slug: String,
+        name: String,
         protocol: String,
     },
     GoBuiltinUrl {
@@ -277,7 +281,7 @@ impl LoginPicker {
                     if slug.is_empty() {
                         return LoginPickerAction::Consumed;
                     }
-                    StepAction::GoCustomProtocol { slug }
+                    StepAction::GoCustomProtocol { slug, name }
                 }
                 KeyCode::Esc => StepAction::Back,
                 _ => {
@@ -285,9 +289,14 @@ impl LoginPicker {
                     return LoginPickerAction::Consumed;
                 }
             },
-            Step::CustomProtocol { picker, slug } => match picker.handle_key(key) {
+            Step::CustomProtocol {
+                picker,
+                slug,
+                name,
+            } => match picker.handle_key(key) {
                 PickerAction::Select(item) => StepAction::GoCustomUrl {
                     slug: slug.clone(),
+                    name: name.clone(),
                     protocol: item.0.to_string(),
                 },
                 PickerAction::Close => StepAction::Back,
@@ -298,6 +307,7 @@ impl LoginPicker {
             Step::CustomUrl {
                 input,
                 slug,
+                name,
                 protocol,
             } => match key.code {
                 KeyCode::Enter => {
@@ -308,7 +318,7 @@ impl LoginPicker {
                     StepAction::GoEnterKey {
                         slug: slug.clone(),
                         plan: None,
-                        display_name: format!("Custom ({})", slug),
+                        display_name: name.clone(),
                         custom: Some(CustomInfo {
                             base_url,
                             protocol: protocol.clone(),
@@ -547,20 +557,25 @@ impl LoginPicker {
                 };
                 LoginPickerAction::Consumed
             }
-            StepAction::GoCustomProtocol { slug } => {
+            StepAction::GoCustomProtocol { slug, name } => {
                 let items: Vec<ProtocolItem> = PROTOCOLS
                     .iter()
                     .map(|(name, display)| ProtocolItem(name, display))
                     .collect();
                 let mut picker = ListPicker::new();
                 picker.open(items, " Protocol ");
-                self.step = Step::CustomProtocol { picker, slug };
+                self.step = Step::CustomProtocol { picker, slug, name };
                 LoginPickerAction::Consumed
             }
-            StepAction::GoCustomUrl { slug, protocol } => {
+            StepAction::GoCustomUrl {
+                slug,
+                name,
+                protocol,
+            } => {
                 self.step = Step::CustomUrl {
                     input: TextBuffer::new(String::new()),
                     slug,
+                    name,
                     protocol,
                 };
                 LoginPickerAction::Consumed

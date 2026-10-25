@@ -101,10 +101,9 @@ struct State<T> {
 
 impl<T: PickerItem> State<T> {
     fn new(items: Vec<T>) -> Self {
-        let filtered = (0..items.len()).collect();
-        Self {
+        let mut this = Self {
             items,
-            filtered,
+            filtered: Vec::new(),
             selected: 0,
             search: TextBuffer::new(String::new()),
             scroll_offset: 0,
@@ -113,7 +112,9 @@ impl<T: PickerItem> State<T> {
             enabled: None,
             matcher: Matcher::new(Config::DEFAULT),
             notice: None,
-        }
+        };
+        this.rebuild_filter();
+        this
     }
 
     fn replace_items(&mut self, items: Vec<T>) {

@@ -64,7 +64,7 @@ pub(crate) fn provider_entries(storage: &StateDir) -> (Vec<ProviderEntry>, bool)
         }
         entries.push(ProviderEntry {
             slug: slug.clone(),
-            display_name: def.display_name.clone().unwrap_or_else(|| slug.clone()),
+            display_name: providers::resolve_display_name(slug, config.get(slug)),
             auth: auth_of(storage, slug, def.api_key_env.as_deref()),
             configured: false,
             from_catalog: false,
@@ -75,6 +75,11 @@ pub(crate) fn provider_entries(storage: &StateDir) -> (Vec<ProviderEntry>, bool)
         return (entries, false);
     };
     for cat in catalog {
+        // A slug the config or a builtin already answers for must not come
+        // a second time from the catalog — same rule discovery applies.
+        if entries.iter().any(|e| e.slug == cat.slug) {
+            continue;
+        }
         entries.push(ProviderEntry {
             slug: cat.slug.clone(),
             display_name: cat.display_name.clone(),
