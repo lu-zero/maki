@@ -4,6 +4,7 @@ use std::sync::Arc;
 use arc_swap::ArcSwapOption;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Frame;
+use unicode_width::UnicodeWidthStr;
 use ratatui::layout::{Position, Rect};
 
 use maki_providers::Model;
@@ -19,9 +20,12 @@ use crate::repaint::{Cadence, Dirty, Watch};
 
 const TITLE: &str = " Models ";
 const RECENT_SECTION: &str = "Recent";
-const FREE_LABEL: &str = "Free";
-const FREE_PREFIX: &str = "Free · ";
-const PRICE_SEPARATOR: &str = " · ";
+const FREE_SEGMENT: &str = "free";
+const DETAIL_SEPARATOR: &str = " · ";
+/// "compaction", the longest tier name.
+const TIER_COL: usize = 10;
+/// What `format_pricing` pads a price pair out to.
+const PRICE_COL: usize = 15;
 const PRICE_WIDTH: usize = 7;
 const LOADING_NOTICE: &str = "loading models...";
 const NO_KEY_LABEL: &str = "no key";
@@ -521,6 +525,25 @@ fn format_pricing(model: &Model) -> Option<String> {
     })
 }
 
+/// The right column of a model row, in fixed fields so rows line up:
+/// the tier right-aligned in its column, then `free` or the pricing
+/// left-aligned in the value column. Missing fields leave their column
+/// blank (trailing padding), which the right-aligned render hides.
+fn format_detail(tier: &str, free: bool, price: Option<&str>) -> String {
+    let tier_field = (!tier.is_empty()).then(|| format!("{tier:>TIER_COL$}"));
+    let value_field = if free {
+        Some(format!("{FREE_SEGMENT:>PRICE_COL$}"))
+    } else {
+        price.map(|p| format!("{:>PRICE_COL$}", p.trim_end()))
+    };
+    match (tier_field, value_field) {
+        (Some(tier), Some(value)) => format!("{tier}{DETAIL_SEPARATOR}{value}"),
+        (Some(tier), None) => format!("{tier}{}", " ".repeat(DETAIL_SEPARATOR.width() + PRICE_COL)),
+        (None, Some(value)) => format!("{}{value}", " ".repeat(TIER_COL + DETAIL_SEPARATOR.width())),
+        (None, None) => String::new(),
+    }
+}
+
 fn parse_model_entry(spec: &str) -> Option<ModelEntry> {
     let (provider_str, model_id) = spec.split_once('/')?;
 
@@ -553,16 +576,8 @@ fn parse_model_entry(spec: &str) -> Option<ModelEntry> {
             .collect::<Vec<_>>()
             .join("/")
     };
-    let tier = match (free, tier.is_empty()) {
-        (true, true) => FREE_LABEL.to_string(),
-        (true, false) => format!("{FREE_PREFIX}{tier}"),
-        (false, _) => tier,
-    };
-    let detail = match price {
-        Some(price) if !tier.is_empty() => format!("{tier}{PRICE_SEPARATOR}{price}"),
-        Some(price) => price,
-        None => tier,
-    };
+    let detail = format_detail(&tier, free, price.as_deref());
+
     let id = model_id.to_string();
     Some(ModelEntry {
         spec: spec.to_string(),
@@ -827,7 +842,7 @@ mod tests {
     fn parse_model_entry_paid_model_not_marked_free() {
         let entry = parse_model_entry("anthropic/claude-sonnet-4-20250514").unwrap();
         assert!(
-            !entry.detail.starts_with(FREE_PREFIX),
+            !entry.detail.trim_end().ends_with(FREE_SEGMENT),
             "paid anthropic model must not be marked free"
         );
     }
@@ -1279,6 +1294,35 @@ mod tests {
         );
     }
 
+    /// Every detail is a fixed two-column layout: the tier right-aligned in
+    /// its column, the free flag or pricing left-aligned in the value
+    /// column, blanks padding missing fields so rows line up.
+    #[test]
+    fn detail_columns_are_aligned() {
+        assert_eq!(
+            format_detail("medium", false, Some("  $3.00/$15.00 ")),
+            format!("{:>TIER_COL$} · {:>PRICE_COL$}", "medium", "$3.00/$15.00")
+        );
+        assert_eq!(
+            format_detail("weak", false, None),
+            format!(
+                "{:>TIER_COL$}{}",
+                "weak",
+                " ".repeat(DETAIL_SEPARATOR.width() + PRICE_COL)
+            )
+        );
+        assert_eq!(
+            format_detail("", true, None),
+            format!(
+                "{}{FREE_SEGMENT:>PRICE_COL$}",
+                " ".repeat(TIER_COL + DETAIL_SEPARATOR.width())
+            )
+        );
+        assert_eq!(format_detail("", false, None), "");
+    }
+
+
+
     fn discovered(id: &str, pricing: ModelPricing) -> ModelInfo {
         ModelInfo {
             pricing: Some(pricing),
@@ -1306,8 +1350,9 @@ mod tests {
         register_discovered_models();
         let entry = parse_model_entry(OX_SPEC).unwrap();
         assert!(
-            entry.detail.starts_with(FREE_PREFIX),
-            "zero-priced discovery must mark the entry free"
+            entry.detail.trim_end().ends_with(FREE_SEGMENT),
+            "zero-priced discovery must mark the entry free, got {:?}",
+            entry.detail
         );
     }
 
@@ -1316,13 +1361,14 @@ mod tests {
         register_discovered_models();
         let entry = parse_model_entry(&format!("ollama/{PAID_ID}")).unwrap();
         assert!(
-            !entry.detail.starts_with(FREE_PREFIX),
+            !entry.detail.trim_end().ends_with(FREE_SEGMENT),
             "paid discovery must not mark the entry free"
         );
         assert!(
             entry
                 .detail
-                .ends_with(&format!("{PRICE_SEPARATOR}{PAID_PRICE_LABEL}")),
+                .trim_end()
+                .ends_with(PAID_PRICE_LABEL.trim_end()),
             "paid discovery must show its price"
         );
     }
@@ -1347,3 +1393,40 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod layout_dbg {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    use crate::components::buffer_text;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    #[test]
+    fn dbg_layout() {
+        let models = Arc::new(ArcSwapOption::empty());
+        models.store(Some(Arc::new(ModelList {
+            specs: vec![
+                "zai/glm-5.3-flash".into(),
+                "mistral/zai-glm-5-3-flash".into(),
+            ],
+            loading: false,
+            providers: BTreeMap::new(),
+        })));
+        let mut p = ModelPicker::new(models);
+        p.set_recents(vec![
+            "opencode/beam-free".into(),
+            "mistral/zai-glm-5-3-flash".into(),
+            "zai/glm-5.3-flash".into(),
+        ]);
+        p.open("opencode/beam-free", &[]);
+        let mut t = Terminal::new(TestBackend::new(100, 12)).unwrap();
+        t.draw(|f| _ = p.view(f, f.area())).unwrap();
+        let text = buffer_text(t.backend().buffer());
+        for line in text.lines() {
+            if let Some(pos) = line.find("medium").or_else(|| line.find("weak")) {
+                let dpos = line.find("$0.15").unwrap_or(line.find("free").unwrap_or(0));
+                println!("tier@{pos} value@{dpos} | {}", line.trim_end());
+            }
+        }
+    }
+}
