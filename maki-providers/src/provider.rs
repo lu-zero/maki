@@ -170,6 +170,9 @@ pub struct ModelBatch {
     pub provider: String,
     pub models: Vec<String>,
     pub warnings: Vec<String>,
+    /// The provider could not be built for want of credentials. The picker
+    /// says so instead of resolving auth a second time.
+    pub missing_credentials: bool,
 }
 
 /// Splits qualified specs into per-slug batches, keeping the order within a
@@ -240,9 +243,22 @@ pub async fn fetch_all_models(
 
     for spec in ProviderRegistry::all() {
         let slug = spec.slug;
-        let Ok(provider) = smol::unblock(move || provider_for_slug(slug, timeouts)).await else {
-            warn!(provider = slug, "failed to create provider, skipping");
-            continue;
+        let provider = match smol::unblock(move || provider_for_slug(slug, timeouts)).await {
+            Ok(provider) => provider,
+            Err(e) => {
+                warn!(provider = slug, error = %e, "failed to create provider, skipping");
+                if matches!(e, AgentError::MissingCredentials { .. }) {
+                    let _ = tx
+                        .send_async(ModelBatch {
+                            provider: slug.to_string(),
+                            models: Vec::new(),
+                            warnings: Vec::new(),
+                            missing_credentials: true,
+                        })
+                        .await;
+                }
+                continue;
+            }
         };
         let display_name = spec.display_name;
         let tx = tx.clone();
@@ -264,6 +280,7 @@ pub async fn fetch_all_models(
                         provider: slug.to_string(),
                         models: specs,
                         warnings: Vec::new(),
+                        missing_credentials: false,
                     }
                 }
                 Err(e) => {
@@ -280,6 +297,7 @@ pub async fn fetch_all_models(
                         warnings: vec![format!(
                             "{display_name}: {e} (using static fallback)"
                         )],
+                        missing_credentials: false,
                     }
                 }
             };
@@ -309,6 +327,7 @@ pub async fn fetch_all_models(
                     provider: slug,
                     models,
                     warnings: Vec::new(),
+                    missing_credentials: false,
                 })
                 .await;
         }
@@ -323,6 +342,7 @@ pub async fn fetch_all_models(
                     provider,
                     models,
                     warnings: Vec::new(),
+                    missing_credentials: false,
                 })
                 .await;
         }
@@ -333,6 +353,7 @@ pub async fn fetch_all_models(
                     provider,
                     models,
                     warnings: Vec::new(),
+                    missing_credentials: false,
                 })
                 .await;
         }
