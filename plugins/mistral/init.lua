@@ -61,7 +61,8 @@ maki.provider.register({
   },
   family = "generic",
   accepts_arbitrary_models = true,
-  -- Mistral publishes no output caps.
+  -- The /models listing only reports max_context_length; rows whose model card
+  -- publishes an output cap state it themselves.
   max_output_tokens = false,
   context_window = 128000,
   aperture = { path_prefix = "/v1" },
@@ -86,6 +87,7 @@ maki.provider.register({
       tier = "strong",
       family = "glm",
       supports_vision = false,
+      max_output_tokens = 131072,
       context_window = 1000000,
       pricing = { input = 1.4, output = 4.4, cache_write = 0.0, cache_read = 0.14 },
     },
@@ -94,6 +96,7 @@ maki.provider.register({
       tier = "strong",
       family = "glm",
       supports_vision = false,
+      max_output_tokens = 131072,
       context_window = 1000000,
       pricing = { input = 1.4, output = 4.4, cache_write = 0.0, cache_read = 0.14 },
     },
