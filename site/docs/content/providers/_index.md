@@ -511,7 +511,7 @@ Current plans:
 
 | Provider | Plan | What it does |
 |----------|------|--------------|
-| Mistral | `standard` | Standard at `https://api.mistral.ai/v1`, default `mistral/mistral-medium-latest` |
+| Mistral | `standard` | Standard at `https://api.mistral.ai/v1`, default `mistral/mistral-large-4` |
 | Mistral | `coding` | Vibe / Coding at `https://api.mistral.ai/v1`, default `mistral/mistral-vibe-cli-latest` |
 | Z.AI | `standard` | Pay-as-you-go at `https://api.z.ai/api/paas/v4`, default `zai/glm-5.1` |
 | Z.AI | `coding` | Coding plan at `https://api.z.ai/api/coding/paas/v4`, default `zai/glm-5-code` |

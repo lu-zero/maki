@@ -49,9 +49,9 @@ maki.provider.register({
   base_url = "https://api.mistral.ai/v1",
   api_key_env = "MISTRAL_API_KEY",
   login_url = "https://admin.mistral.ai/organization/api-keys",
-  default_model = "mistral-medium-latest",
+  default_model = "mistral-large-4",
   plans = {
-    { key = "standard", display_name = "Standard", default_model = "mistral-medium-latest" },
+    { key = "standard", display_name = "Standard", default_model = "mistral-large-4" },
     {
       key = "coding",
       display_name = "Vibe / Coding",
