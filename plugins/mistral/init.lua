@@ -73,7 +73,7 @@ maki.provider.register({
       default = true,
       supports_vision = true,
       context_window = 1000000,
-      pricing = { input = 1.36, output = 4.18, cache_write = 0.0, cache_read = 0.14 },
+      pricing = { input = 0.7, output = 2.1, cache_write = 0.0, cache_read = 0.07 },
     },
     {
       prefixes = { "mistral-medium-latest", "mistral-medium-3.5", "mistral-medium-3-5", "mistral-medium-2604" },
