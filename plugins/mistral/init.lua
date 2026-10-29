@@ -69,6 +69,7 @@ maki.provider.register({
     {
       prefixes = { "mistral-large-4", "mistral-large-4-0" },
       tier = "strong",
+      default = true,
       supports_vision = true,
       context_window = 1000000,
       pricing = { input = 1.36, output = 4.18, cache_write = 0.0, cache_read = 0.14 },
@@ -76,7 +77,6 @@ maki.provider.register({
     {
       prefixes = { "mistral-medium-latest", "mistral-medium-3.5", "mistral-medium-3-5", "mistral-medium-2604" },
       tier = "strong",
-      default = true,
       supports_vision = true,
       context_window = 262144,
       pricing = { input = 1.5, output = 7.5, cache_write = 0.0, cache_read = 0.0 },
@@ -116,6 +116,7 @@ maki.provider.register({
     {
       prefixes = { "zai-glm-5-3-flash" },
       tier = "weak",
+      default = true,
       family = "glm",
       supports_vision = true,
       max_output_tokens = 131072,
@@ -125,7 +126,6 @@ maki.provider.register({
     {
       prefixes = { "ministral-14b-latest", "ministral-14b-2512" },
       tier = "weak",
-      default = true,
       supports_vision = false,
       context_window = 262144,
       pricing = { input = 0.2, output = 0.2, cache_write = 0.0, cache_read = 0.0 },
