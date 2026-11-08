@@ -431,6 +431,26 @@ mod tests {
         assert_eq!(listing.finish().live_providers, ["b"]);
     }
 
+    /// A skip batch carries no models and an empty `providers`, so the slug
+    /// never lands in `live_providers` and its recents are not retired.
+    #[test]
+    fn a_skip_batch_does_not_mark_its_provider_live() {
+        let mut listing = Listing::default();
+        listing.add_live(&ModelBatch {
+            provider: "a".to_string(),
+            models: Vec::new(),
+            providers: Vec::new(),
+            warnings: Vec::new(),
+            missing_credentials: true,
+        });
+        let done = listing.finish();
+        assert!(done.live_providers.is_empty());
+        assert!(
+            done.providers["a"].missing_credentials,
+            "the status still records the skip"
+        );
+    }
+
     #[test]
     fn provider_status_carries_count_and_first_warning() {
         let mut listing = Listing::default();

@@ -268,9 +268,12 @@ pub async fn fetch_all_models(
             Err(e) => {
                 warn!(provider = slug, error = %e, "failed to create provider, skipping");
                 if matches!(e, AgentError::MissingCredentials { .. }) {
+                    // An empty `providers` keeps the slug out of
+                    // `live_providers`: a skip is not a live answer, and the
+                    // picker must not treat recents from it as retired.
                     let _ = tx
                         .send_async(ModelBatch {
-                            providers: vec![slug.to_string()],
+                            providers: Vec::new(),
                             provider: slug.to_string(),
                             models: Vec::new(),
                             warnings: Vec::new(),
@@ -347,7 +350,7 @@ pub async fn fetch_all_models(
         for slug in custom.missing_credentials {
             let _ = tx_custom
                 .send_async(ModelBatch {
-                    providers: vec![slug.clone()],
+                    providers: Vec::new(),
                     provider: slug,
                     models: Vec::new(),
                     warnings: Vec::new(),

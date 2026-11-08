@@ -5,16 +5,13 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
-use maki_config::providers::{self, Protocol, ProviderDef, ProvidersConfig, slugify};
-use maki_providers::catalog_providers_if_available;
-use maki_storage::StateDir;
-use maki_storage::auth::{
-    ProviderCredentials, load_provider_credentials, load_tokens, save_provider_credentials,
-};
+use maki_config::providers::{self, Protocol, ProvidersConfig, slugify};
+use maki_storage::auth::{ProviderCredentials, save_provider_credentials};
 use maki_storage::model::persist_model;
 
 use crate::components::list_picker::{ListPicker, PickerAction, PickerItem};
 use crate::components::modal::Modal;
+use crate::components::provider_auth::{Auth, provider_entries};
 use crate::components::{Overlay, chevron_span, field_line, painted_caret};
 use crate::text_buffer::TextBuffer;
 use crate::theme;
@@ -210,68 +207,22 @@ impl LoginPicker {
     }
 
     pub fn open(&mut self, storage: maki_storage::StateDir) {
-        let builtins = providers::all_builtins();
-        let config = providers::ProvidersConfig::load();
-        let mut items: Vec<ProviderItem> = builtins
+        self.from_picker = false;
+        let (entries, catalog_ready) = provider_entries(&storage);
+        let mut items: Vec<ProviderItem> = entries
             .iter()
-            .map(|b| {
-                let has_key = load_provider_credentials(&storage, b.slug).is_some()
-                    || load_tokens(&storage, b.slug).is_some();
-                let has_env = std::env::var(b.default_api_key_env).is_ok();
-                let configured = !has_key
-                    && !has_env
-                    && config.get(b.slug).is_some_and(|d| d.base_url.is_some());
-                ProviderItem {
-                    slug: b.slug.to_string(),
-                    display_name: b.display_name.to_string(),
-                    has_key,
-                    has_env,
-                    configured,
-                    from_config: false,
-                    section: None,
-                }
+            .map(|e| ProviderItem {
+                slug: e.slug.clone(),
+                display_name: e.display_name.clone(),
+                has_key: e.auth == Auth::Saved,
+                has_env: e.auth == Auth::Env,
+                configured: e.configured,
+                from_config: e.from_config,
+                section: None,
             })
             .collect();
 
-        for (slug, def) in &config.providers {
-            if slug == "opencode" || providers::builtin_provider(slug).is_some() {
-                continue;
-            }
-            let has_key = load_provider_credentials(&storage, slug).is_some();
-            let has_env = def
-                .api_key_env
-                .as_deref()
-                .is_some_and(|e| std::env::var(e).is_ok());
-            items.push(ProviderItem {
-                slug: slug.clone(),
-                display_name: def.display_name.clone().unwrap_or_else(|| slug.clone()),
-                has_key,
-                has_env,
-                configured: false,
-                from_config: true,
-                section: None,
-            });
-        }
-
-        if let Some(catalog) = catalog_providers_if_available() {
-            let state_dir = StateDir::resolve().ok();
-            for cat in catalog {
-                let has_key = state_dir
-                    .as_ref()
-                    .and_then(|s| cat.load_key_from_storage(s))
-                    .is_some();
-                let has_env = cat.env_key_set().is_some();
-                items.push(ProviderItem {
-                    slug: cat.slug.clone(),
-                    display_name: cat.display_name.clone(),
-                    has_key,
-                    has_env,
-                    configured: false,
-                    from_config: false,
-                    section: Some("Providers from Models.dev"),
-                });
-            }
-        } else {
+        if !catalog_ready {
             items.push(ProviderItem {
                 slug: CATALOG_UNAVAILABLE_SLUG.to_string(),
                 display_name: "Models.dev providers (not yet downloaded)".to_string(),
@@ -402,15 +353,15 @@ impl LoginPicker {
                     if base_url.is_empty() {
                         return LoginPickerAction::Consumed;
                     }
+                    // The entry already exists in providers.toml; only its
+                    // base_url changes here, so hand the key step no custom
+                    // info and let it update the existing entry.
                     StepAction::GoEnterKey {
                         slug: slug.clone(),
                         plan: None,
                         display_name: name.clone(),
-                        custom: Some(CustomInfo {
-                            base_url,
-                            protocol: "openai".to_string(),
-                        }),
-                        builtin_url: None,
+                        custom: None,
+                        builtin_url: Some(base_url),
                         api_key_optional: *api_key_optional,
                     }
                 }
@@ -516,21 +467,26 @@ impl LoginPicker {
                     let mut config = ProvidersConfig::load();
 
                     if let Some(info) = &custom_c {
-                        let api_key_env =
-                            format!("{}_API_KEY", slug_c.to_uppercase().replace('-', "_"));
-                        let provider_def = ProviderDef {
-                            display_name: Some(dn_c.clone()),
-                            protocol: Some(
-                                info.protocol
-                                    .parse::<Protocol>()
-                                    .unwrap_or(Protocol::Openai),
-                            ),
-                            base_url: Some(info.base_url.clone()),
-                            api_key_env: Some(api_key_env),
-                            discover_models: true,
-                            ..Default::default()
-                        };
-                        config.upsert(slug_c.clone(), provider_def);
+                        // Load the existing entry and set only the fields the
+                        // setup flow owns, so protocol, models, headers and
+                        // api_key survive an endpoint edit.
+                        let mut def = config.get(&slug_c).cloned().unwrap_or_default();
+                        if def.display_name.is_none() {
+                            def.display_name = Some(dn_c.clone());
+                        }
+                        def.protocol = Some(
+                            info.protocol
+                                .parse::<Protocol>()
+                                .unwrap_or(Protocol::Openai),
+                        );
+                        def.base_url = Some(info.base_url.clone());
+                        if def.api_key_env.is_none() {
+                            def.api_key_env = Some(format!(
+                                "{}_API_KEY",
+                                slug_c.to_uppercase().replace('-', "_")
+                            ));
+                        }
+                        config.upsert(slug_c.clone(), def);
                         if let Err(e) = config.save() {
                             return self.transition(StepAction::GoDone {
                                 message: format!("Error saving config: {e}"),
@@ -854,6 +810,7 @@ impl Overlay for LoginPicker {
 
     fn close(&mut self) {
         self.step = Step::Closed;
+        self.from_picker = false;
     }
 }
 
@@ -917,6 +874,7 @@ mod tests {
     use test_case::test_case;
 
     use super::*;
+    use maki_storage::StateDir;
 
     const FIRST_LABEL: &str = "Alpha";
     const SECOND_LABEL: &str = "Beta";
@@ -1001,5 +959,101 @@ mod tests {
             _ => panic!("{WRONG_STEP}"),
         };
         assert_eq!(selected.as_deref(), Some(SECOND_LABEL), "{WRONG_SELECTION}");
+    }
+
+    const HOME_VARS: &[&str] = &[
+        "HOME",
+        "XDG_STATE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_CACHE_HOME",
+    ];
+
+    const SETUP_SLUG: &str = "declared-gateway";
+    const OLD_URL: &str = "https://old.example/v1";
+    const NEW_URL: &str = "https://new.example/v1";
+    const PRESERVED_ENV: &str = "DECLARED_GATEWAY_API_KEY";
+    const PRESERVED_PROTOCOL: &str = "anthropic";
+
+    /// Points every base directory at a throwaway tree, so neither the real
+    /// providers.toml nor this machine's credentials reach the setup flow.
+    fn isolated_home() -> tempfile::TempDir {
+        let dir = tempfile::TempDir::new().expect("no temporary home");
+        for var in HOME_VARS {
+            // SAFETY: nextest runs one test per process, so no other thread
+            // reads the environment while this test holds it.
+            unsafe { std::env::set_var(var, dir.path()) };
+        }
+        dir
+    }
+
+    /// A declared provider keeps protocol, api_key_env, models and headers
+    /// when the model picker's setup flow edits only its endpoint.
+    #[test]
+    fn setup_from_picker_updates_only_the_endpoint_of_an_existing_entry() {
+        let _home = isolated_home();
+        let config_dir = maki_storage::paths::config_dir().expect("config dir");
+        std::fs::create_dir_all(&config_dir).expect("config dir");
+        std::fs::write(
+            config_dir.join("providers.toml"),
+            format!(
+                "[{SETUP_SLUG}]\nprotocol = \"{PRESERVED_PROTOCOL}\"\nbase_url = \"{OLD_URL}\"\napi_key_env = \"{PRESERVED_ENV}\"\ndiscover_models = true\n\n[[{SETUP_SLUG}.models]]\nid = \"kept-model\"\ntier = \"strong\"\n"
+            ),
+        )
+        .expect("seed providers.toml");
+
+        let storage = StateDir::from_path(std::env::temp_dir().join("maki-login-test-state"));
+        let mut picker = LoginPicker::new();
+        picker.storage = Some(storage);
+        picker.step = Step::EditEndpoint {
+            input: TextBuffer::new(NEW_URL.to_owned()),
+            slug: SETUP_SLUG.to_owned(),
+            name: "Declared Gateway".to_owned(),
+            api_key_optional: true,
+        };
+        picker.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        // The endpoint edit hands the key step no custom info...
+        let Step::EnterKey {
+            custom,
+            builtin_url,
+            ..
+        } = &picker.step
+        else {
+            panic!("the endpoint edit did not advance to the key step");
+        };
+        assert!(
+            custom.is_none(),
+            "an existing entry is updated, not rewritten"
+        );
+        assert_eq!(builtin_url.as_deref(), Some(NEW_URL));
+        // ...and the key step writes only base_url onto the loaded entry.
+        picker.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        let saved = ProvidersConfig::load();
+        let def = saved.get(SETUP_SLUG).expect("the entry survives");
+        assert_eq!(def.base_url.as_deref(), Some(NEW_URL));
+        assert_eq!(
+            def.protocol,
+            Some(Protocol::Anthropic),
+            "the protocol is preserved"
+        );
+        assert_eq!(def.api_key_env.as_deref(), Some(PRESERVED_ENV));
+        assert_eq!(def.models.len(), 1, "the declared models are preserved");
+        assert!(def.discover_models, "discover_models is preserved");
+    }
+
+    /// Opening or closing the wizard clears the from-picker flag, so a
+    /// cancelled setup cannot send the next `/login` back into `/model`.
+    #[test]
+    fn open_and_close_clear_the_from_picker_flag() {
+        let _home = isolated_home();
+        let mut picker = LoginPicker::new();
+        picker.from_picker = true;
+        let storage = StateDir::from_path(std::env::temp_dir().join("maki-login-test-state"));
+        picker.open(storage.clone());
+        assert!(!picker.from_picker, "open resets the flag");
+        picker.from_picker = true;
+        picker.close();
+        assert!(!picker.from_picker, "close resets the flag");
     }
 }
