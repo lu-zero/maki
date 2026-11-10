@@ -405,11 +405,11 @@ fn honours_build_body(target: Target) -> bool {
 /// The `openai` table is the chat codec's own vocabulary. The responses codec
 /// spells neither effort nor extra body the same way, so it is refused there
 /// rather than half honoured.
-fn honours_openai_wire(target: Target) -> bool {
+fn honours_openai_wire(target: Target, wire: &OpenAiWire) -> bool {
     match target {
         Target::Codec(Protocol::Openai) => true,
-        Target::Codec(Protocol::OpenaiResponses | Protocol::Anthropic | Protocol::Google)
-        | Target::Base(_) => false,
+        Target::Codec(Protocol::OpenaiResponses) => wire.responses_compatible(),
+        Target::Codec(Protocol::Anthropic | Protocol::Google) | Target::Base(_) => false,
     }
 }
 
@@ -729,7 +729,9 @@ fn target_of(decl: &ProviderDecl, hooks: &ProviderHooks) -> Result<Target, Regis
     if decl.system_prefix.is_some() && !honours_system_prefix(target) {
         return Err(unsupported(SYSTEM_PREFIX_OPTION));
     }
-    if decl.openai.is_some() && !honours_openai_wire(target) {
+    if let Some(wire) = &decl.openai
+        && !honours_openai_wire(target, wire)
+    {
         return Err(unsupported(OPENAI_OPTION));
     }
     if decl.session_id.is_some() && !honours_session_id(target) {
@@ -3163,6 +3165,19 @@ mod tests {
         reg.decl.openai = Some(OpenAiWire::default());
     }
 
+    /// A chat-only field of the `openai` table, on the responses codec, which
+    /// honours only `thinking` and `thinking_overrides`.
+    fn openai_wire_chat_field_on_responses(reg: &mut Registration) {
+        reg.decl.codec = Some(Protocol::OpenaiResponses);
+        reg.decl.openai = Some(
+            serde_json::from_value(serde_json::json!({
+                "thinking": { "dialect": "high-only" },
+                "max_tokens_field": "max_output_tokens",
+            }))
+            .unwrap(),
+        );
+    }
+
     fn session_id_on_google(reg: &mut Registration) {
         reg.decl.codec = Some(Protocol::Google);
         reg.decl.session_id = Some(SessionCarrier::default());
@@ -3209,6 +3224,7 @@ mod tests {
     #[test_case(outside_a_load, |e| matches!(e, RegisterError::Closed(_)) ; "registration_outside_a_load")]
     #[test_case(body_hook_on_anthropic, |e| matches!(e, RegisterError::Unsupported { .. }) ; "build_body_needs_an_openai_codec")]
     #[test_case(openai_wire_on_anthropic, |e| matches!(e, RegisterError::Unsupported { option, .. } if *option == OPENAI_OPTION) ; "openai_table_needs_the_openai_codec")]
+    #[test_case(openai_wire_chat_field_on_responses, |e| matches!(e, RegisterError::Unsupported { option, .. } if *option == OPENAI_OPTION) ; "responses_codec_refuses_chat_only_fields")]
     #[test_case(session_id_on_google, |e| matches!(e, RegisterError::Unsupported { option, .. } if *option == SESSION_ID_OPTION) ; "google_carries_no_session_id")]
     #[test_case(system_prefix_on_google, |e| matches!(e, RegisterError::Unsupported { .. }) ; "google_drops_the_system_prefix")]
     #[test_case(system_prefix_on_the_google_base, |e| matches!(e, RegisterError::Unsupported { .. }) ; "so_does_the_google_base")]
