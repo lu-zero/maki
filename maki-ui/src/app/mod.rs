@@ -1649,6 +1649,12 @@ impl App {
     fn handle_login_picker_action(&mut self, action: LoginPickerAction) -> Vec<Action> {
         match action {
             LoginPickerAction::Consumed => vec![],
+            // The wizard was opened from the model picker, so backing
+            // out returns there instead of dropping into chat.
+            LoginPickerAction::BackToPicker => {
+                self.model_picker.open(&self.state.model.spec());
+                vec![Action::RefreshModels]
+            }
             LoginPickerAction::Close => vec![],
             LoginPickerAction::OpenUrl(url) => vec![Action::OpenUrl(url)],
             LoginPickerAction::Authenticated { model_spec } => {
