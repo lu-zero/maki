@@ -544,7 +544,7 @@ fn add_stdio(lua: &Lua, ctx: &Table) -> LuaResult<()> {
     ctx.set(
         "open_url",
         lua.create_function(|_, url: String| -> LuaResult<Pair<bool>> {
-            try_pair!(open::that(&url));
+            try_pair!(maki_providers::open_url(&url));
             Ok((Some(true), None))
         })?,
     )

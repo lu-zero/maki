@@ -568,7 +568,7 @@ pub(crate) fn suspend(terminal: &mut ratatui::DefaultTerminal) {
     resume(terminal);
 }
 
-fn teardown() {
+pub(crate) fn teardown() {
     pop_terminal_modes();
     terminal::disable_raw_mode().ok();
     stdout().execute(LeaveAlternateScreen).ok();
@@ -612,7 +612,7 @@ fn pop_terminal_modes() {
     stdout().execute(DisableBracketedPaste).ok();
 }
 
-fn resume(terminal: &mut ratatui::DefaultTerminal) {
+pub(crate) fn resume(terminal: &mut ratatui::DefaultTerminal) {
     crate::terminal_image::invalidate();
     write_mux_sequence(PUSH_WINDOW_TITLE_SEQUENCE);
     stdout().execute(EnterAlternateScreen).ok();

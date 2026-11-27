@@ -446,7 +446,7 @@ async fn prompt_host_url(
 
 async fn prompt_api_key(url: Option<&str>, display_name: &str, optional: bool) -> Result<String> {
     if let Some(url) = url {
-        if let Err(e) = open::that(url) {
+        if let Err(e) = maki_providers::open_url(url) {
             tracing::warn!(error = %e, "failed to open browser");
         }
         println!("  Opened {} in your browser.", url);

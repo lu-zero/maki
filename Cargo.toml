@@ -36,7 +36,6 @@ tempfile = { workspace = true }
 reqwest = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
-open = { workspace = true }
 unicode-width = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
@@ -165,7 +164,7 @@ libc = "0.2"
 windows-sys = { version = "0.61", features = ["Win32_Globalization"] }
 nucleo = "0.5"
 nucleo-matcher = "0.3"
-open = "5"
+webbrowser = "1.2"
 criterion = { version = "0.8", features = ["html_reports"] }
 etcetera = "0.11"
 dotenvy = "0.15"

@@ -1,3 +1,4 @@
+pub mod browser;
 mod child_env;
 pub(crate) mod error;
 pub mod headers;
@@ -20,6 +21,7 @@ mod tls;
 pub mod tokens;
 pub(crate) mod types;
 
+pub use browser::open_url;
 pub use child_env::{shell_command, strip_provider_keys};
 pub use error::{AgentError, Overflow};
 pub use maki_storage::sessions::add_cost;

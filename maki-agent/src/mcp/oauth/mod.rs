@@ -370,14 +370,14 @@ async fn wait_for_code(
 }
 
 /// Resolves with the reason once the browser could not be opened, and never
-/// when it could. `open::that` waits for the launcher, and xdg-open can wait
+/// when it could. The browser helper waits for the launcher, and xdg-open can wait
 /// for the browser, so it runs on the blocking pool next to the callback wait.
 async fn browser_launch_failure(auth_url: &str) -> String {
-    if is_headless() {
+    if is_headless() || maki_providers::browser::browser_env_uses_tty() {
         return "no display to open a browser".into();
     }
     let auth_url = auth_url.to_owned();
-    match blocking(move || open::that(auth_url)).await {
+    match blocking(move || maki_providers::open_url(&auth_url)).await {
         Ok(()) => pending().await,
         Err(e) => format!("failed to open browser: {e}"),
     }
@@ -391,9 +391,15 @@ fn auth_timed_out() -> String {
 }
 
 fn is_headless() -> bool {
-    cfg!(target_os = "linux")
-        && std::env::var_os("DISPLAY").is_none()
-        && std::env::var_os("WAYLAND_DISPLAY").is_none()
+    headless(
+        std::env::var_os("DISPLAY").is_some(),
+        std::env::var_os("WAYLAND_DISPLAY").is_some(),
+        std::env::var_os("BROWSER").is_some_and(|b| !b.is_empty()),
+    )
+}
+
+fn headless(display: bool, wayland: bool, browser: bool) -> bool {
+    cfg!(target_os = "linux") && !display && !wayland && !browser
 }
 
 /// rmcp's registration drops `client_secret_expires_at`, so a secret without a
@@ -434,6 +440,22 @@ mod tests {
             auth_server: None,
             resource: None,
         }
+    }
+
+    #[test_case(false, false, false, true  ; "no_display_no_browser")]
+    #[test_case(false, false, true,  false ; "browser_without_display")]
+    #[test_case(true,  false, false, false ; "display")]
+    #[test_case(false, true,  false, false ; "wayland")]
+    fn headless_needs_neither_display_nor_browser(
+        display: bool,
+        wayland: bool,
+        browser: bool,
+        expected_on_linux: bool,
+    ) {
+        assert_eq!(
+            headless(display, wayland, browser),
+            expected_on_linux && cfg!(target_os = "linux")
+        );
     }
 
     #[test_case(Some(PINNED), PINNED, true  ; "same_endpoint")]

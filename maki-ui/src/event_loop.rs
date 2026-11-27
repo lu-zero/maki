@@ -2518,11 +2518,22 @@ impl<'t> EventLoop<'t> {
                 self.open_editor(idx, &path);
             }
             Action::OpenUrl(url) => {
-                spawn_blocking(move || {
-                    if let Err(e) = open::that_detached(&url) {
-                        warn!(error = %e, url, "failed to open browser");
+                let tty = maki_providers::browser::browser_env_uses_tty();
+                let result = {
+                    let _pause = self.input.pause();
+                    if tty {
+                        terminal::teardown();
                     }
-                });
+                    let result = maki_providers::open_url(&url);
+                    if tty {
+                        terminal::resume(self.terminal);
+                    }
+                    result
+                };
+                self.focus.on_resume();
+                if let Err(e) = result {
+                    warn!(error = %e, url, "failed to open browser");
+                }
             }
             Action::EditInputInEditor => {
                 let current_text = self.sessions[idx].app.input_box.buffer.value();
@@ -2786,6 +2797,7 @@ mod tests {
         MOVED_ID, answer_permission, app_with_moved_call, ask_tool_permission, end_turn,
         open_question_float, streaming_app, test_app,
     };
+
     use crate::components::BackgroundOutcome;
     use maki_agent::DoneReason;
     use maki_providers::provider::BoxFuture;

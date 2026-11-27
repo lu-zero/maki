@@ -359,7 +359,7 @@ async fn browser_login() -> Result<TokenResponse, AgentError> {
     let redirect_uri = redirect_uri();
     let authorize_url = authorization_url(&redirect_uri, &challenge, &state);
     println!("Open this URL in your browser:\n\n  {authorize_url}\n");
-    if let Err(e) = open::that(&authorize_url) {
+    if let Err(e) = crate::open_url(&authorize_url) {
         warn!(error = %e, "failed to open browser");
     }
     println!("Waiting for OpenAI OAuth callback on {redirect_uri}...");
