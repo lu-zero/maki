@@ -91,6 +91,26 @@ impl ClipboardState {
         }
     }
 
+    /// Publishes an image through the same long-lived handle as text. The
+    /// handle owns the X11 selection, so it outlives this call.
+    pub(crate) fn copy_image(
+        &mut self,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    ) -> Result<(), String> {
+        let Some(clipboard) = &mut self.native else {
+            return Err("native clipboard unavailable".into());
+        };
+        clipboard
+            .set_image(arboard::ImageData {
+                width: width as usize,
+                height: height as usize,
+                bytes: rgba.into(),
+            })
+            .map_err(|e| e.to_string())
+    }
+
     fn copy_native(&mut self, text: &str) -> Result<(), String> {
         let Some(clipboard) = &mut self.native else {
             return Err("native clipboard unavailable".into());

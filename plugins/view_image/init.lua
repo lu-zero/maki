@@ -4,7 +4,8 @@ local DESCRIPTION =
   [[View an image file (png, jpeg, gif, webp) so you can actually see it; it is returned as vision input alongside the tool result. Use instead of `read` for images.
 
 - Paths: absolute, relative, or ~/.
-- Oversized images are downscaled automatically (animated gif/webp keep only the first frame).]]
+- Oversized images are downscaled automatically (animated gif/webp keep only the first frame).
+- Set `copy` to put the image on the system clipboard as well.]]
 
 -- Anthropic rejects images over 5MB base64; 3MB raw is ~4MB encoded,
 -- which leaves headroom.
@@ -131,6 +132,10 @@ maki.api.register_tool({
         required = true,
         alias = "file_path",
       },
+      copy = {
+        type = "boolean",
+        description = "Also copy the image to the system clipboard",
+      },
     },
   },
 
@@ -153,6 +158,16 @@ maki.api.register_tool({
     if meta.is_dir then
       return fail("error: " .. path .. " is a directory")
     end
-    return load_image(path)
+    local result = load_image(path)
+    if input.copy then
+      local image = type(result.image) == "table" and result.image or nil
+      if image and image.copy then
+        local ok, copy_err = image:copy()
+        if not ok then
+          return fail("cannot copy " .. path .. ": " .. tostring(copy_err))
+        end
+      end
+    end
+    return result
   end,
 })

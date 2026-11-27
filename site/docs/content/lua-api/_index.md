@@ -71,6 +71,7 @@ of the action leaves its permission out, see
 - `session_write`: adding to, removing, or creating conversation content: new sessions, prompts, notices, and deleting sessions or task transcripts
 - `session_settings`: changing how a session runs without touching its content: mode, title, model, thinking, fast mode, working directory, and workflow
 - `input`: changing the chat input, which is what your next Enter sends
+- `clipboard`: writing to the system clipboard, which other apps can read
 
 Grants come from a `plugin.toml` next to the Lua file (for
 `~/.config/maki/init.lua` that is `~/.config/maki/plugin.toml`):
@@ -89,6 +90,7 @@ session_read = true
 session_write = true
 session_settings = true
 input = true
+clipboard = true
 ```
 
 The rules:
@@ -3896,6 +3898,28 @@ An image from `resize` asked for its own format comes back as is.
 ```lua
 local bytes = img:encode("png")
 -- bytes is a Lua string containing the raw PNG data
+```
+
+---
+
+### `Image:copy()` {#Image-copy}
+
+```lua
+Image:copy()
+```
+
+Put this image on the system clipboard through the UI's clipboard handle. This is not an OSC 52 write, which carries text only.
+
+Requires the `clipboard` [plugin permission](#plugin-permissions).
+
+**Returns:** (`boolean?`, `string?`) true, or `(nil, err)` on failure.
+
+**Example:**
+
+```lua
+local img = maki.image.decode(raw_bytes)
+local ok, err = img:copy()
+if err then error(err) end
 ```
 
 

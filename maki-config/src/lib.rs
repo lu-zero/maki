@@ -173,6 +173,7 @@ pub enum Permission {
     SessionWrite,
     SessionSettings,
     Input,
+    Clipboard,
 }
 
 impl Permission {
@@ -210,6 +211,7 @@ impl Permission {
             Permission::SessionWrite => "session_write",
             Permission::SessionSettings => "session_settings",
             Permission::Input => "input",
+            Permission::Clipboard => "clipboard",
         }
     }
 
@@ -236,6 +238,7 @@ impl Permission {
                 "changing how a session runs without touching its content: mode, title, model, thinking, fast mode, working directory, and workflow"
             }
             Permission::Input => "changing the chat input, which is what your next Enter sends",
+            Permission::Clipboard => "writing to the system clipboard, which other apps can read",
         }
     }
 }

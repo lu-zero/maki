@@ -10,15 +10,19 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use image::imageops::FilterType;
 use image::{DynamicImage, ImageFormat, ImageReader};
+use maki_config::Permission;
 use maki_lua_macro::{lua_class, lua_fn, lua_table};
 use maki_providers::{ImageMediaType, ImageSource};
 use mlua::{
     AnyUserData, Lua, LuaString, Result as LuaResult, Table, UserDataRef, Value as LuaValue,
 };
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::spawn_blocking;
 
+use super::util::command::{UiAction, ui_roundtrip};
 use super::util::convert::bytes_arg;
-use super::util::pair::{Pair, try_pair};
+use super::util::pair::{Pair, err_pair, try_pair};
+use crate::plugin_permissions::{PluginPermissions, require};
 
 /// Decode-bomb guard: a tiny file can declare huge dimensions and balloon
 /// into gigabytes of RGBA. Host-fixed so no plugin can disable it; 50MP
@@ -187,16 +191,24 @@ impl ImageState {
 
 /// `Arc` so resize/encode can hop to a blocking thread without copying, and
 /// so a payload placed into a message is shared rather than copied.
-pub(crate) struct LuaImage(Arc<ImageState>);
+struct CopyContext {
+    perms: PluginPermissions,
+    tx: Option<UnboundedSender<UiAction>>,
+}
+
+pub(crate) struct LuaImage(Arc<ImageState>, Option<Arc<CopyContext>>);
 
 impl LuaImage {
     /// O(1): the payload is shared and nothing is decoded until asked for.
     pub(crate) fn from_source(source: ImageSource) -> Self {
-        Self(Arc::new(ImageState {
-            source,
-            canonical: false,
-            pixels: OnceLock::new(),
-        }))
+        Self(
+            Arc::new(ImageState {
+                source,
+                canonical: false,
+                pixels: OnceLock::new(),
+            }),
+            None,
+        )
     }
 
     /// O(1): shares the payload.
@@ -243,6 +255,7 @@ async fn resize(
     max_h: u32,
 ) -> LuaResult<LuaImage> {
     let state = Arc::clone(&this.0);
+    let context = this.1.clone();
     drop(this);
     if max_w == 0 || max_h == 0 {
         return Err(mlua::Error::runtime("resize: dimensions must be positive"));
@@ -251,7 +264,7 @@ async fn resize(
         .await
         .map_err(mlua::Error::external)?
         .map_err(|e| mlua::Error::runtime(format!("resize: {e}")))?;
-    Ok(LuaImage(resized))
+    Ok(LuaImage(resized, context))
 }
 
 /// Encode the image into raw bytes in the given format. Use this to prepare
@@ -284,6 +297,60 @@ async fn encode(lua: Lua, this: UserDataRef<LuaImage>, format: String) -> LuaRes
     lua.create_string(encoded)
 }
 
+/// Put this image on the system clipboard. The UI owns the clipboard handle,
+/// so the pixels go there through an action. This is not an OSC 52 write,
+/// which carries text only.
+async fn copy(lua: Lua, this: UserDataRef<LuaImage>) -> LuaResult<Pair<bool>> {
+    let ctx = this
+        .1
+        .clone()
+        .ok_or_else(|| mlua::Error::runtime("image.copy: no UI attached to this image"))?;
+    require(&lua, &ctx.perms, Permission::Clipboard)?;
+    let state = Arc::clone(&this.0);
+    drop(this);
+    let (rgba, width, height) = try_pair!(
+        spawn_blocking(move || {
+            let pixels = state.pixels()?;
+            Ok::<_, String>((
+                pixels.to_rgba8().into_raw(),
+                pixels.width(),
+                pixels.height(),
+            ))
+        })
+        .await
+        .map_err(mlua::Error::external)?
+    );
+    let reply = try_pair!(
+        ui_roundtrip(ctx.tx.as_ref(), |reply_tx| UiAction::CopyImage {
+            width,
+            height,
+            rgba,
+            reply_tx,
+        })
+        .await
+    );
+    match reply {
+        Ok(()) => Ok((Some(true), None)),
+        Err(e) => Ok(err_pair(e)),
+    }
+}
+
+fn register_copy<M: mlua::UserDataMethods<LuaImage>>(methods: &mut M) {
+    methods.add_async_method("copy", |lua, this, ()| copy(lua, this));
+}
+
+#[allow(non_upper_case_globals)]
+pub(crate) const copy__doc: crate::docs::FnDoc = crate::docs::FnDoc {
+    name: "copy",
+    args: "",
+    desc: "Put this image on the system clipboard through the UI's clipboard handle. This is not an OSC 52 write, which carries text only.",
+    params: &[],
+    returns: "(boolean?, string?) true, or `(nil, err)` on failure.",
+    example: "local img = maki.image.decode(raw_bytes)\nlocal ok, err = img:copy()\nif err then error(err) end",
+    guard: Some(&[Permission::Clipboard]),
+    value: false,
+};
+
 lua_class! {
     /// An image you can inspect, resize, and re-encode.
     ///
@@ -292,7 +359,7 @@ lua_class! {
     /// message image source or through `maki.json.encode` it becomes
     /// `{ type = "base64", media_type, data }`. The data lives in memory
     /// until the handle is garbage collected.
-    "maki.image.Image" => LuaImage, IMAGE_DOCS [width, height, resize, encode]
+    "maki.image.Image" => LuaImage, IMAGE_DOCS [width, height, resize, encode, manual copy], extra register_copy
 }
 
 /// Read image metadata (format, dimensions) from raw bytes without fully
@@ -332,14 +399,26 @@ fn probe(lua: &Lua, data: LuaValue) -> LuaResult<Pair<Table>> {
 /// if err then error(err) end
 /// print(img:width() .. "x" .. img:height())
 #[lua_fn]
-async fn decode(lua: Lua, data: LuaValue) -> LuaResult<Pair<AnyUserData>> {
+async fn decode(
+    lua: Lua,
+    #[ctx] perms: PluginPermissions,
+    #[ctx] tx: Option<UnboundedSender<UiAction>>,
+    data: LuaValue,
+) -> LuaResult<Pair<AnyUserData>> {
     let bytes = bytes_arg(&data, "image.decode")?;
     let state = try_pair!(
         spawn_blocking(move || ImageState::from_bytes(&bytes))
             .await
             .map_err(mlua::Error::external)?
     );
-    Ok((Some(lua.create_userdata(LuaImage(Arc::new(state)))?), None))
+    let copy = Arc::new(CopyContext {
+        perms: perms.clone(),
+        tx,
+    });
+    Ok((
+        Some(lua.create_userdata(LuaImage(Arc::new(state), Some(copy)))?),
+        None,
+    ))
 }
 
 lua_table! {
@@ -353,18 +432,43 @@ lua_table! {
     /// local small = img:resize(1024, 768)
     /// local png = small:encode("png")
     /// ```
-    "maki.image" => pub(crate) fn create_image_table(), DOCS [
-        probe, decode,
-    ]
+    "maki.image" => pub(crate) fn create_image_table(
+        perms: PluginPermissions,
+        tx: Option<UnboundedSender<UiAction>>
+    ), DOCS [probe, decode(perms, tx)]
 }
 
 #[cfg(test)]
 mod tests {
     use image::codecs::png::{CompressionType, FilterType as PngFilter, PngEncoder};
+
     use image::{Rgb, RgbImage};
     use test_case::test_case;
 
     use super::*;
+
+    #[test]
+    fn copy_requires_the_clipboard_permission() {
+        let lua = Lua::new();
+        let image = LuaImage(
+            Arc::new(ImageState::from_bytes(&png_bytes(4, 4)).unwrap()),
+            Some(Arc::new(CopyContext {
+                perms: PluginPermissions::denied(),
+                tx: None,
+            })),
+        );
+        lua.globals()
+            .set("img", lua.create_userdata(image).unwrap())
+            .unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let error = runtime
+            .block_on(async { lua.load("return img:copy()").eval_async::<LuaValue>().await })
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("clipboard"), "got: {error}");
+    }
 
     const GRADIENT_EDGE: u32 = 64;
 
@@ -462,7 +566,7 @@ mod tests {
     fn same_format_encode_reencodes_external_bytes(decoded: bool) {
         let original = uncompressed_png();
         let image = if decoded {
-            LuaImage(Arc::new(ImageState::from_bytes(&original).unwrap()))
+            LuaImage(Arc::new(ImageState::from_bytes(&original).unwrap()), None)
         } else {
             LuaImage::from_source(source_from_bytes(ImageMediaType::Png, &original))
         };

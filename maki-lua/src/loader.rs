@@ -3182,6 +3182,7 @@ mod bundled_manifests {
     const TOOL_REGISTER: &str = "maki.api.register_tool";
     const API_KEY_ENV_FIELD: &str = "api_key_env";
     const AGENT_SESSION: &str = "maki.agent.session";
+    const IMAGE_COPY_CALL: &str = ":copy()";
     const SESSION_NOTIFY: &str = "maki.session.notify";
     const WAKE_OPTION: &str = "wake =";
     const UI_ACTION_CALL: &str = "maki.ui.action(";
@@ -3464,6 +3465,9 @@ mod bundled_manifests {
                         }
                     }
                 }
+                if calls(source, IMAGE_COPY_CALL) {
+                    needed.insert(Permission::Clipboard, IMAGE_COPY_CALL.to_owned());
+                }
                 // A built-in action is guarded by its name, and an edit by
                 // whether it changes the text, which the API metadata cannot
                 // see.
@@ -3483,10 +3487,13 @@ mod bundled_manifests {
                 // A bundled plugin opening a session hands over whatever the
                 // chat has, and a session pays for everything it hands over.
                 // That leaves out what no tool reaches, as the session's own
-                // check does.
+                // check does. The clipboard is OS state, not chat content.
                 if calls(source, AGENT_SESSION) {
                     for &permission in Permission::ALL {
-                        if !matches!(permission, Permission::Agent | Permission::Input) {
+                        if !matches!(
+                            permission,
+                            Permission::Agent | Permission::Input | Permission::Clipboard
+                        ) {
                             needed
                                 .entry(permission)
                                 .or_insert_with(|| AGENT_SESSION.to_owned());

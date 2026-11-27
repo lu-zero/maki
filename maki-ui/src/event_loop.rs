@@ -1370,6 +1370,18 @@ impl<'t> EventLoop<'t> {
                 let code = self.open_editor(self.focused, &path);
                 let _ = reply_tx.send(code);
             }
+            UiAction::CopyImage {
+                width,
+                height,
+                rgba,
+                reply_tx,
+            } => {
+                let result = self.sessions[self.focused]
+                    .app
+                    .clipboard
+                    .copy_image(width, height, rgba);
+                let _ = reply_tx.send(result);
+            }
             UiAction::OpenWin {
                 session,
                 buf,

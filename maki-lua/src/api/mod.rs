@@ -94,7 +94,10 @@ pub(crate) fn create_maki_global(
     maki.set("treesitter", treesitter::create_treesitter_table(lua)?)?;
     maki.set("uv", uv::create_uv_table(lua, permissions)?)?;
     maki.set("base64", base64::create_base64_table(lua)?)?;
-    maki.set("image", image::create_image_table(lua)?)?;
+    maki.set(
+        "image",
+        image::create_image_table(lua, permissions.clone(), ui_action_tx.clone())?,
+    )?;
     maki.set("json", json::create_json_table(lua)?)?;
     maki.set("yaml", yaml::create_yaml_table(lua)?)?;
     maki.set("version", version::create_version_table(lua)?)?;

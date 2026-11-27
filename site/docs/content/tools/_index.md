@@ -159,6 +159,7 @@ View an image file (png, jpeg, gif, webp) so you can actually see it; it is retu
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
+| `copy` | boolean | no | Also copy the image to the system clipboard |
 | `path` | string | yes | Path to the image file |
 
 ## Execution & Control

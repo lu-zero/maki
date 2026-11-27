@@ -814,6 +814,14 @@ pub enum UiAction {
     },
     Flash(String),
     SetWindowTitle(String),
+    /// Pixels for the UI's long-lived clipboard handle to publish. It owns
+    /// the selection, so the bytes cannot be written from the Lua thread.
+    CopyImage {
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+        reply_tx: oneshot::Sender<Result<(), String>>,
+    },
     OpenEditor {
         path: PathBuf,
         reply_tx: oneshot::Sender<i32>,

@@ -1877,8 +1877,11 @@ mod tests {
     fn with_plugin_globals(lua: Lua) -> Lua {
         let maki = lua.create_table().unwrap();
         maki.set("json", create_json_table(&lua).unwrap()).unwrap();
-        maki.set("image", create_image_table(&lua).unwrap())
-            .unwrap();
+        maki.set(
+            "image",
+            create_image_table(&lua, PluginPermissions::trusted(), None).unwrap(),
+        )
+        .unwrap();
         maki.set("base64", create_base64_table(&lua).unwrap())
             .unwrap();
         maki.set("NIL", Value::NULL).unwrap();
